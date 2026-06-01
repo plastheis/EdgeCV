@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from edgecv.trackers.cf.mosse import _bilinear_sample, _crop_patch, _rand_warp
+from edgecv.trackers.cf.mosse import (
+    _bilinear_sample,
+    _crop_patch,
+    _preprocess,
+    _rand_warp,
+    _subpixel_peak,
+)
 
 
 def test_crop_patch_fully_inside_keeps_shape():
@@ -44,3 +50,21 @@ def test_rand_warp_is_seed_deterministic():
     a = _rand_warp(patch, np.random.default_rng(7))
     b = _rand_warp(patch, np.random.default_rng(7))
     np.testing.assert_array_equal(a, b)
+
+
+def test_preprocess_constant_patch_is_all_zero():
+    # z-score of a constant has zero std -> zero; windowing keeps it zero.
+    patch = np.full((16, 16, 3), 100, np.uint8)
+    window = np.ones((16, 16), np.float32)
+    out = _preprocess(patch, window)
+    assert out.shape == (16, 16)
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(out, 0.0, atol=1e-5)
+
+
+def test_subpixel_peak_interpolates_fractional_offset():
+    r = np.zeros((5, 5), np.float32)
+    r[2, 1], r[2, 2], r[2, 3] = 2.0, 4.0, 3.0  # peak at (2,2), skewed toward +x
+    py, px = _subpixel_peak(r)
+    assert py == pytest.approx(2.0, abs=1e-6)
+    assert px == pytest.approx(2.0 + 0.5 * (2.0 - 3.0) / (2.0 - 8.0 + 3.0), abs=1e-6)

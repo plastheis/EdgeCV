@@ -77,3 +77,29 @@ def _rand_warp(
     src_x = cos_a * xr + sin_a * yr + cx
     src_y = -sin_a * xr + cos_a * yr + cy
     return _bilinear_sample(patch, src_x, src_y)
+
+
+def _preprocess(patch: np.ndarray, window: np.ndarray) -> np.ndarray:
+    """MOSSE preprocessing: grayscale -> log -> z-score -> cosine window."""
+    gray = ops.extract_raw(patch)[..., 0]
+    x = np.log(gray + 1.0)
+    x = (x - x.mean()) / (x.std() + 1e-5)
+    return (x * window).astype(np.float32)
+
+
+def _subpixel_peak(response: np.ndarray) -> tuple[float, float]:
+    """Refined (py, px) peak location via per-axis parabolic interpolation."""
+    h, w = response.shape
+    iy, ix = np.unravel_index(int(np.argmax(response)), response.shape)
+    py, px = float(iy), float(ix)
+    if 0 < ix < w - 1:
+        left, ctr, right = response[iy, ix - 1], response[iy, ix], response[iy, ix + 1]
+        denom = left - 2.0 * ctr + right
+        if denom != 0:
+            px += 0.5 * (left - right) / denom
+    if 0 < iy < h - 1:
+        up, ctr, down = response[iy - 1, ix], response[iy, ix], response[iy + 1, ix]
+        denom = up - 2.0 * ctr + down
+        if denom != 0:
+            py += 0.5 * (up - down) / denom
+    return py, px
