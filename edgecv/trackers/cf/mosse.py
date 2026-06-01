@@ -25,6 +25,11 @@ def _crop_patch(
     px1, py1 = max(0, x0 + tw - w), max(0, y0 + th - h)
     sx0, sy0 = max(0, x0), max(0, y0)
     sx1, sy1 = min(w, x0 + tw), min(h, y0 + th)
+    if sx0 >= sx1 or sy0 >= sy1:
+        edge_y = int(np.clip(round(cy), 0, h - 1))
+        edge_x = int(np.clip(round(cx), 0, w - 1))
+        fill = frame[edge_y, edge_x]
+        return np.broadcast_to(fill, (th, tw) + frame.shape[2:]).copy()
     patch = frame[sy0:sy1, sx0:sx1]
     if px0 or px1 or py0 or py1:
         pad = [(py0, py1), (px0, px1)] + [(0, 0)] * (frame.ndim - 2)

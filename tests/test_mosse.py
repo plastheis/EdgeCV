@@ -10,6 +10,14 @@ from edgecv.trackers.cf.mosse import (
 )
 
 
+def test_crop_patch_fully_outside_frame_returns_filled_patch():
+    frame = np.arange(100, dtype=np.uint8).reshape(10, 10)
+    patch = _crop_patch(frame, center=(-100.0, -100.0), size=(6, 6))
+    assert patch.shape == (6, 6)
+    # window is entirely off the top-left; edge policy fills from the nearest pixel
+    assert np.all(patch == frame[0, 0])
+
+
 def test_crop_patch_fully_inside_keeps_shape():
     frame = np.arange(100, dtype=np.uint8).reshape(10, 10)
     patch = _crop_patch(frame, center=(5.0, 5.0), size=(6, 6))
@@ -22,6 +30,7 @@ def test_crop_patch_edge_pads_when_window_crosses_border():
     assert patch.shape == (6, 6)
     # top-left is outside the frame; edge mode replicates frame[0, 0] == 0
     assert patch[0, 0] == frame[0, 0]
+    assert patch[3, 3] == frame[1, 1]   # interior pixel maps to the correct frame location
 
 
 def test_crop_patch_preserves_channels():
