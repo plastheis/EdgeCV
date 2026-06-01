@@ -196,9 +196,10 @@ class Mosse(CorrelationFilterTracker):
         new_bbox = BoundingBox.from_pixels(new_pix, w_img, h_img)
         return EvalResult(bbox=new_bbox, response_map=response, psr=ops.psr(response))
 
-    def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:  # type: ignore[override]
+    def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:
         raise NotImplementedError("init() is implemented in Task 8")
 
+    # TODO(Task 9): remove the type: ignore and restore the real -> TrackResult body
     def update(self, frame: np.ndarray) -> None:  # type: ignore[override]
         raise NotImplementedError("update() is implemented in Task 9")
 
