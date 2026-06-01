@@ -35,3 +35,45 @@ def _crop_patch(
         pad = [(py0, py1), (px0, px1)] + [(0, 0)] * (frame.ndim - 2)
         patch = np.pad(patch, pad, mode="edge")
     return patch
+
+
+def _bilinear_sample(img: np.ndarray, src_x: np.ndarray, src_y: np.ndarray) -> np.ndarray:
+    """Sample ``img`` at floating (src_x, src_y) coords with clamped bilinear interpolation."""
+    h, w = img.shape[0], img.shape[1]
+    x0 = np.floor(src_x).astype(np.int32)
+    y0 = np.floor(src_y).astype(np.int32)
+    wx = (src_x - x0).astype(np.float32)
+    wy = (src_y - y0).astype(np.float32)
+    x0c, x1c = np.clip(x0, 0, w - 1), np.clip(x0 + 1, 0, w - 1)
+    y0c, y1c = np.clip(y0, 0, h - 1), np.clip(y0 + 1, 0, h - 1)
+    if img.ndim == 3:
+        wx, wy = wx[..., None], wy[..., None]
+    ia, ib = img[y0c, x0c], img[y0c, x1c]
+    ic, idd = img[y1c, x0c], img[y1c, x1c]
+    top = ia * (1.0 - wx) + ib * wx
+    bot = ic * (1.0 - wx) + idd * wx
+    return (top * (1.0 - wy) + bot * wy).astype(img.dtype)
+
+
+def _rand_warp(
+    patch: np.ndarray,
+    rng: np.random.Generator,
+    max_rot_deg: float = 2.0,
+    max_scale: float = 0.02,
+) -> np.ndarray:
+    """Small random rotation+scale about the patch centre (Bolme init augmentation).
+
+    Rotation/scale keep the target centred, so the centred desired-output Gaussian
+    stays valid across augmented samples.
+    """
+    h, w = patch.shape[0], patch.shape[1]
+    ang = np.deg2rad(rng.uniform(-max_rot_deg, max_rot_deg))
+    scale = 1.0 + rng.uniform(-max_scale, max_scale)
+    cos_a = np.cos(ang) / scale
+    sin_a = np.sin(ang) / scale
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    ys, xs = np.indices((h, w)).astype(np.float32)
+    xr, yr = xs - cx, ys - cy
+    src_x = cos_a * xr + sin_a * yr + cx
+    src_y = -sin_a * xr + cos_a * yr + cy
+    return _bilinear_sample(patch, src_x, src_y)

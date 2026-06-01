@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from edgecv.trackers.cf.mosse import _crop_patch
+from edgecv.trackers.cf.mosse import _bilinear_sample, _crop_patch, _rand_warp
 
 
 def test_crop_patch_fully_inside_keeps_shape():
@@ -22,3 +22,25 @@ def test_crop_patch_preserves_channels():
     frame = np.zeros((10, 10, 3), dtype=np.uint8)
     patch = _crop_patch(frame, center=(5.0, 5.0), size=(6, 6))
     assert patch.shape == (6, 6, 3)
+
+
+def test_bilinear_sample_identity_grid_returns_same_image():
+    img = np.random.default_rng(0).standard_normal((8, 8)).astype(np.float32)
+    ys, xs = np.indices((8, 8)).astype(np.float32)
+    out = _bilinear_sample(img, xs, ys)
+    np.testing.assert_allclose(out, img, atol=1e-5)
+
+
+def test_rand_warp_preserves_shape_and_constant_image():
+    rng = np.random.default_rng(1)
+    const = np.full((16, 16), 5.0, np.float32)
+    out = _rand_warp(const, rng)
+    assert out.shape == (16, 16)
+    np.testing.assert_allclose(out, 5.0, atol=1e-4)
+
+
+def test_rand_warp_is_seed_deterministic():
+    patch = np.random.default_rng(2).standard_normal((16, 16)).astype(np.float32)
+    a = _rand_warp(patch, np.random.default_rng(7))
+    b = _rand_warp(patch, np.random.default_rng(7))
+    np.testing.assert_array_equal(a, b)
