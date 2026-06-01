@@ -1,0 +1,11 @@
+# Shipped default board profile for RK3588 (ARCHITECTURE.md §7.6).
+# User-overridable: pass your own YAML to edgecv.runtime.placement.load_profile.
+board: rk3588
+processes:
+  caller:                       # CF + fusion run inline here; sets output rate
+    cpu_affinity: [4, 5, 6, 7]            # A76 big cores
+    sched: {policy: FIFO, priority: 80}   # optional; needs CAP_SYS_NICE
+  detector:                     # the async NPU worker
+    cpu_affinity: [0, 1]                  # A55 little cores for pre/post-processing
+    npu_core: 0                           # one of the RK3588's three NPU cores
+    backend: rknn
