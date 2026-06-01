@@ -46,7 +46,7 @@ class OnnxModel(Model):
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         names = [o.name for o in self._io_spec.outputs]
         results = self._session.run(names, inputs)
-        return dict(zip(names, results))
+        return dict(zip(names, results, strict=False))
 
     def close(self) -> None:
         self._session = None

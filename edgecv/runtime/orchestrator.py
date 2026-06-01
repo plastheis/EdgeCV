@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from edgecv.runtime.worker import child_main
 
@@ -43,7 +43,7 @@ class Orchestrator:
         for name, spec in self._specs.items():
             if name in self._procs and self._procs[name].is_alive():
                 continue
-            proc = self._ctx.Process(
+            proc = self._ctx.Process(  # type: ignore[attr-defined]
                 target=child_main, args=(spec.target, spec.args), name=name, daemon=True
             )
             proc.start()
@@ -69,7 +69,7 @@ class Orchestrator:
         if self._closed:
             return
         self._closed = True
-        for name, proc in self._procs.items():
+        for _name, proc in self._procs.items():
             if proc.is_alive():
                 proc.terminate()
         for name, proc in self._procs.items():

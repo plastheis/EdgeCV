@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import ctypes
 import os
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 T = TypeVar("T")
 

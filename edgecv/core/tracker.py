@@ -27,7 +27,7 @@ class Tracker(ABC):
     def name(self) -> str:
         """Human-readable tracker name, e.g. "MOSSE", "SiamFC", "MAFiD"."""
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027 - intentional concrete no-op, not abstract
         """Tear down any owned process group / shared memory. No-op for inline trackers."""
 
     def __enter__(self) -> Tracker:

@@ -56,8 +56,9 @@ def test_seqlock_torn_read_is_retried():
     finally:
         # Release every export into shm.buf before closing (py3.12+ BufferError):
         # the ndarray view plus the closures (writer/reader) that capture it.
+        # Rebind (not `del`) so the names stay defined for the closure bodies.
         lock.release()
-        del lock, payload, writer, reader
+        lock = payload = writer = reader = None  # noqa: F841
         gc.collect()
         shm.close()
         shm.unlink()

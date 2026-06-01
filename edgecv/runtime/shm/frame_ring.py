@@ -41,7 +41,7 @@ class FrameRing:
         self._owner = owner
         self._slot_bytes = max_h * max_w * max_c * self._dtype.itemsize
         self._data_offset = _CONTROL_SIZE
-        self._control = FrameControl.from_buffer(shm.buf, 0)
+        self._control = FrameControl.from_buffer(shm.buf, 0)  # type: ignore[arg-type]
         self._seqlock = SeqLock(shm.buf, _SEQLOCK_OFFSET)
         self._write_count = 0
         if owner:
