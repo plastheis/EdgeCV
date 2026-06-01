@@ -177,8 +177,6 @@ class Mosse(CorrelationFilterTracker):
         assert self._state is not None, "init() or set_filter() must run before get_filter()"
         return self._state
 
-    # --- stubs required by abstract base (implemented in later tasks) ---
-
     def evaluate(self, frame: np.ndarray, state: FilterState) -> EvalResult:
         th, tw = state.meta["template_size"]
         lam = state.meta["lambda"]
@@ -197,14 +195,32 @@ class Mosse(CorrelationFilterTracker):
         return EvalResult(bbox=new_bbox, response_map=response, psr=ops.psr(response))
 
     def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:
-        raise NotImplementedError("init() is implemented in Task 8")
-
-    # TODO(Task 9): remove the type: ignore and restore the real -> TrackResult body
-    def update(self, frame: np.ndarray) -> None:  # type: ignore[override]
-        raise NotImplementedError("update() is implemented in Task 9")
+        self._state = self.build_filter(frame, bbox)
+        th, tw = self._state.meta["template_size"]
+        self._G = ops.fft2(ops.gaussian2d_labels((th, tw), self._state.meta["sigma"]))
+        self._status = TrackStatus.LOCKED
+        self._response = None
+        self._psr = 0.0
+        self._seq = 0
 
     def set_filter(self, state: FilterState, search_box: BoundingBox | None = None) -> None:
-        raise NotImplementedError("set_filter() is implemented in Task 8")
+        self._state = state
+        th, tw = state.meta["template_size"]
+        self._G = ops.fft2(ops.gaussian2d_labels((th, tw), state.meta["sigma"]))
+        if search_box is not None:
+            scx, scy = search_box.center
+            bw, bh = state.bbox.w, state.bbox.h
+            self._state.bbox = BoundingBox(x=scx - bw / 2.0, y=scy - bh / 2.0, w=bw, h=bh)
+
+    def _status_from(self, psr: float) -> TrackStatus:
+        if psr >= self._psr_lock:
+            return TrackStatus.LOCKED
+        if psr >= self._psr_lost:
+            return TrackStatus.COASTING
+        return TrackStatus.LOST
+
+    def update(self, frame: np.ndarray) -> None:  # type: ignore[override]
+        raise NotImplementedError("update() is implemented in Task 9")
 
     @property
     def status(self) -> TrackStatus:

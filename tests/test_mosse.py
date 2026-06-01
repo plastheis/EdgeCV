@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from edgecv.core.bbox import BoundingBox
+from edgecv.core.result import TrackStatus
 from edgecv.trackers.cf.mosse import (
     Mosse,
     _bilinear_sample,
@@ -140,3 +141,34 @@ def test_evaluate_is_pure_and_returns_centered_peak_on_build_frame():
     cx, cy = er.bbox.to_pixels(160, 120).center
     assert cx == pytest.approx(80.0, abs=1.5)
     assert cy == pytest.approx(60.0, abs=1.5)
+
+
+def test_init_builds_filter_and_locks():
+    frame = _blob_frame()
+    t = Mosse(n_warps=2)
+    t.init(frame, _box_at(80, 60, 160, 120))
+    assert t.status == TrackStatus.LOCKED
+    assert t.get_filter().arrays["A"].shape == (64, 64)
+
+
+def test_set_filter_with_search_box_moves_crop_center():
+    frame = _blob_frame()
+    t = Mosse(n_warps=2)
+    t.init(frame, _box_at(80, 60, 160, 120))
+    state = t.get_filter()
+    search = _box_at(100, 70, 160, 120)
+    t.set_filter(state, search_box=search)
+    cx, cy = t.get_filter().bbox.to_pixels(160, 120).center
+    assert cx == pytest.approx(100.0, abs=0.5)
+    assert cy == pytest.approx(70.0, abs=0.5)
+
+
+def test_get_set_round_trip_preserves_evaluation():
+    frame = _blob_frame()
+    t = Mosse(n_warps=2)
+    t.init(frame, _box_at(80, 60, 160, 120))
+    er1 = t.evaluate(frame, t.get_filter())
+    t.set_filter(t.get_filter())
+    er2 = t.evaluate(frame, t.get_filter())
+    np.testing.assert_allclose(
+        er1.bbox.to_pixels(160, 120).center, er2.bbox.to_pixels(160, 120).center, atol=1e-6)
