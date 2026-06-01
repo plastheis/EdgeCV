@@ -308,8 +308,8 @@ ever blocks on another.
 
 ### 7.1 Frame ring (`runtime/shm/frame_ring.py`)
 
-- N fixed-size slots sized for the max supported resolution; consumers read a **zero-copy** numpy
-  view (`np.ndarray(shape, dtype, buffer=shm.buf, offset=slot*slot_size)`).
+- N fixed-size slots sized for the max supported resolution, stored **zero-copy**
+  (`np.ndarray(shape, dtype, buffer=shm.buf, offset=slot*slot_size)`).
 - The producer (caller) writes the next slot, then publishes `(slot, seq, timestamp, h, w, c,
   dtype)` in a small control word.
 - **Latest-only semantics** for trackers: a consumer that fell behind jumps to the newest `seq`
@@ -317,6 +317,14 @@ ever blocks on another.
   mode can be added for cues that need continuity.)
 - Slot recycling is handled by triple-or-more buffering + latest-only reads, avoiding refcounts
   (which would reintroduce contention).
+- **`read_latest` returns a decoupled copy, not a live view.** Slot-data safety comes from N-buffer
+  recycling, not the seqlock — the seqlock guards only the control word, and the producer writes the
+  *data* before bumping it. A returned zero-copy view would therefore tear once the producer cycled
+  back to that slot, so the read copies out under the resolved `(slot, h, w, c)`. The copy sits
+  *outside* the seqlock retry `fn` deliberately: retrying it would buy nothing (it cannot detect a
+  later recycle anyway) and would re-copy on every contended retry. This differs from
+  `payload.try_read`, which copies *inside* the `fn` because its data lives in one seqlock-guarded
+  region rather than in recycled slots.
 
 ### 7.2 Payload channel (`runtime/shm/payload.py`)
 

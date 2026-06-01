@@ -45,4 +45,6 @@ def detach_resource_tracker(shm_name: str) -> None:
 def child_main(target, args: tuple) -> None:
     """Generic child bootstrap: install death signal, then run the worker target."""
     request_death_with_parent()
+    # detach_resource_tracker is wired in here once SHM-attaching workers land
+    # (the foundation has no worker that attaches a segment yet).
     target(*args)

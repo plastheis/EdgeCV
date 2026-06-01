@@ -12,27 +12,12 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
 
 log = logging.getLogger("edgecv.placement")
-
-# Shipped default board profile (also available as packaged YAML in models/profiles).
-_DEFAULT_RK3588 = {
-    "board": "rk3588",
-    "processes": {
-        "caller": {
-            "cpu_affinity": [4, 5, 6, 7],
-            "sched": {"policy": "FIFO", "priority": 80},
-        },
-        "detector": {
-            "cpu_affinity": [0, 1],
-            "npu_core": 0,
-            "backend": "rknn",
-        },
-    },
-}
 
 
 @dataclass
@@ -82,4 +67,9 @@ def load_profile(path: str | os.PathLike) -> BoardProfile:
 
 
 def default_profile() -> BoardProfile:
-    return _from_dict(_DEFAULT_RK3588)
+    """Shipped default (rk3588). Single source of truth is the packaged YAML in
+    models/profiles, so the default cannot drift from the file users override."""
+    data = yaml.safe_load(
+        (files("edgecv.models") / "profiles" / "rk3588.yaml").read_text()
+    )
+    return _from_dict(data)
