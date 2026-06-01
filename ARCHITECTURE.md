@@ -334,6 +334,18 @@ multi-field write, so a reader can catch a half-written payload. The fix is a **
 `seq` is odd or changed across the read. Reads are wait-free and never block the writer, satisfying
 the non-blocking requirement.
 
+**Contended reads MUST yield, not busy-spin (mandatory for liveness).** When a reader sees the seq
+odd (writer mid-write) or changed across its read, it must yield the CPU/GIL (`os.sched_yield()`)
+before retrying — never `continue` in a tight pure-Python loop. This is wait-free in spirit (the
+reader takes no lock and never blocks the writer) but is **required**, not cosmetic: under a *shared
+interpreter* (a writer thread, e.g. tests or a same-process producer) or on a single core, a
+pure-Python spin holds the GIL and the writer can never finish its odd→even transition — the reader
+then exhausts its retry budget and raises *spuriously*, and any non-daemon writer it abandoned leaks.
+The cross-process case (the real deployment) tolerates a naive spin because the OS preempts the
+spinner, but the yield keeps the primitive correct under *both* models and costs nothing on the
+uncontended fast path (even seq, unchanged → immediate return). This was a real livelock in the
+foundation build; do not "optimise" the yield away.
+
 > **Honest caveat for implementers:** pure Python has no explicit memory barriers, so this is
 > "correct in practice for aligned word-size stores on ARM64/x86" rather than provably correct. If
 > stronger guarantees are needed, the control word can be backed by a tiny C extension (or a
@@ -352,6 +364,17 @@ the non-blocking requirement.
   also reaps and (optionally) restarts workers on a heartbeat timeout.
 - **Explicit lifecycle.** `close()` / context-manager protocol tears down workers and segments
   deterministically.
+- **Release buffer exports before `close()` (mandatory on CPython ≥ 3.12).** A `SharedMemory`
+  segment cannot be closed while any object still *exports* a pointer into its buffer —
+  `multiprocessing.shared_memory.SharedMemory.close()` raises `BufferError: cannot close exported
+  pointers exist`. Every `ctypes.*.from_buffer(shm.buf, ...)` view (control structs, the seqlock
+  word, payload descriptors) and every `np.ndarray(buffer=shm.buf, ...)` view counts as an export.
+  Therefore each SHM component's `close()` must **drop all such views first** (set them to `None` /
+  let them go out of scope, `gc.collect()` to be safe) and only then call `shm.close()`. The seqlock
+  exposes `release()` for exactly this; frame ring and payload channel call it plus drop their own
+  structs. Transient views taken inside `publish`/`read` must not be retained past the call. Callers
+  that build their own views on a segment (e.g. a test) are equally responsible for releasing them —
+  including any closures that capture them — before the owner closes.
 
 ### 7.5 ABI versioning
 
@@ -552,7 +575,8 @@ Agents and reviewers: treat these as hard rules.
 1. **Single writer per shared region.** Each frame-ring slot control word and each payload channel
    has exactly one writer.
 2. **Wait-free reads via seqlock.** Readers retry on odd/changed `seq`; never take a blocking lock
-   on the data path.
+   on the data path. A contended reader **yields** the CPU/GIL (`os.sched_yield()`) before each
+   retry — a pure-Python busy-spin starves a same-interpreter/single-core writer and livelocks (§7.3).
 3. **Latest-only for trackers.** Consumers jump to newest `seq`; do not drain stale frames.
 4. **ABI discipline.** Any change to a shared layout bumps `abi_version` in `structs.py` and updates
    both sides; headers carry `magic + abi_version`, validated on attach.
@@ -566,6 +590,10 @@ Agents and reviewers: treat these as hard rules.
    `gc.disable()` in the inline CF loop to avoid GC jitter.
 10. **`seq`/`timestamp` travel with every frame, result, and payload.** Late detections are
     associated by `seq`, never applied blindly to the current frame.
+11. **Release buffer exports before closing a segment.** Drop every `ctypes.from_buffer` / numpy
+    view into `shm.buf` (and any closure capturing them) before `SharedMemory.close()`, or it raises
+    `BufferError` on CPython ≥ 3.12 (§7.4). The seqlock provides `release()`; owners call it and drop
+    their own structs.
 
 ---
 
