@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
+from edgecv.core.bbox import BoundingBox
 from edgecv.trackers.cf.mosse import (
+    Mosse,
     _bilinear_sample,
     _crop_patch,
     _preprocess,
@@ -77,3 +79,42 @@ def test_subpixel_peak_interpolates_fractional_offset():
     py, px = _subpixel_peak(r)
     assert py == pytest.approx(2.0, abs=1e-6)
     assert px == pytest.approx(2.0 + 0.5 * (2.0 - 3.0) / (2.0 - 8.0 + 3.0), abs=1e-6)
+
+
+def _blob_frame(h=120, w=160, cx=80.0, cy=60.0, blob_sigma=6.0):
+    ys, xs = np.indices((h, w)).astype(np.float32)
+    g = np.exp(-((xs - cx) ** 2 + (ys - cy) ** 2) / (2.0 * blob_sigma**2))
+    img = (g * 255.0).astype(np.uint8)
+    return np.stack([img, img, img], axis=-1)
+
+
+def _box_at(cx, cy, w_img, h_img, bw=40, bh=40):
+    return BoundingBox(
+        x=(cx - bw / 2) / w_img, y=(cy - bh / 2) / h_img, w=bw / w_img, h=bh / h_img
+    )
+
+
+def test_build_filter_produces_complex64_AB_of_template_size():
+    frame = _blob_frame()
+    t = Mosse(n_warps=2)
+    state = t.build_filter(frame, _box_at(80, 60, 160, 120))
+    th, tw = state.meta["template_size"]
+    assert (th, tw) == (64, 64)
+    assert state.arrays["A"].dtype == np.complex64
+    assert state.arrays["B"].dtype == np.complex64
+    assert state.arrays["A"].shape == (64, 64)
+    assert state.meta["abi"] == "mosse-1"
+
+
+def test_build_filter_is_pure_and_seed_deterministic():
+    frame = _blob_frame()
+    t = Mosse(n_warps=4, rng_seed=3)
+    box = _box_at(80, 60, 160, 120)
+    s1 = t.build_filter(frame, box)
+    s2 = t.build_filter(frame, box)
+    np.testing.assert_array_equal(s1.arrays["A"], s2.arrays["A"])
+    np.testing.assert_array_equal(s1.arrays["B"], s2.arrays["B"])
+
+
+def test_name_is_mosse():
+    assert Mosse().name() == "MOSSE"

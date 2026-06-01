@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from edgecv.core.bbox import BoundingBox
+from edgecv.core.result import TrackStatus
 from edgecv.trackers.cf import ops
+from edgecv.trackers.cf.base import CorrelationFilterTracker, EvalResult, FilterState
 
 
 def _crop_patch(
@@ -103,3 +106,100 @@ def _subpixel_peak(response: np.ndarray) -> tuple[float, float]:
         if denom != 0:
             py += 0.5 * (up - down) / denom
     return py, px
+
+
+class Mosse(CorrelationFilterTracker):
+    def __init__(
+        self,
+        *,
+        padding: float = 1.0,
+        sigma: float = 2.0,
+        eta: float = 0.125,
+        lmbda: float = 1e-3,
+        n_warps: int = 8,
+        psr_lock: float = 7.0,
+        psr_lost: float = 5.0,
+        rng_seed: int = 0,
+    ) -> None:
+        self._padding = padding
+        self._sigma = sigma
+        self._eta = eta
+        self._lmbda = lmbda
+        self._n_warps = n_warps
+        self._psr_lock = psr_lock
+        self._psr_lost = psr_lost
+        self._rng_seed = rng_seed
+        self._state: FilterState | None = None
+        self._G: np.ndarray | None = None
+        self._response: np.ndarray | None = None
+        self._psr: float = 0.0
+        self._status: TrackStatus = TrackStatus.INITIALIZING
+        self._seq: int = 0
+
+    def name(self) -> str:
+        return "MOSSE"
+
+    def build_filter(self, frame: np.ndarray, bbox: BoundingBox) -> FilterState:
+        h_img, w_img = frame.shape[0], frame.shape[1]
+        pix = bbox.to_pixels(w_img, h_img)
+        cx, cy = pix.center
+        th = ops.fft_size(int(round(pix.h * self._padding)))
+        tw = ops.fft_size(int(round(pix.w * self._padding)))
+        window = ops.cos_window((th, tw))
+        big_g = ops.fft2(ops.gaussian2d_labels((th, tw), self._sigma))
+        rng = np.random.default_rng(self._rng_seed)
+        a = np.zeros((th, tw), np.complex128)
+        b = np.zeros((th, tw), np.complex128)
+        for i in range(self._n_warps + 1):
+            patch = _crop_patch(frame, (cx, cy), (th, tw))
+            if i > 0:
+                patch = _rand_warp(patch.astype(np.float32), rng)
+            f = ops.fft2(_preprocess(patch, window))
+            a += big_g * np.conj(f)
+            b += f * np.conj(f)
+        meta = {
+            "template_size": (th, tw),
+            "padding": self._padding,
+            "sigma": self._sigma,
+            "eta": self._eta,
+            "lambda": self._lmbda,
+            "feature": "raw",
+            "preproc": "log_zscore",
+            "abi": "mosse-1",
+        }
+        return FilterState(
+            arrays={"A": a.astype(np.complex64), "B": b.astype(np.complex64)},
+            bbox=bbox,
+            meta=meta,
+        )
+
+    def get_filter(self) -> FilterState:
+        assert self._state is not None, "init() or set_filter() must run before get_filter()"
+        return self._state
+
+    # --- stubs required by abstract base (implemented in later tasks) ---
+
+    def evaluate(self, frame: np.ndarray, state: FilterState) -> EvalResult:
+        raise NotImplementedError("evaluate() is implemented in Task 7")
+
+    def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:  # type: ignore[override]
+        raise NotImplementedError("init() is implemented in Task 8")
+
+    def update(self, frame: np.ndarray) -> None:  # type: ignore[override]
+        raise NotImplementedError("update() is implemented in Task 9")
+
+    def set_filter(self, state: FilterState, search_box: BoundingBox | None = None) -> None:
+        raise NotImplementedError("set_filter() is implemented in Task 8")
+
+    @property
+    def status(self) -> TrackStatus:
+        return self._status
+
+    @property
+    def response_map(self) -> np.ndarray:
+        assert self._response is not None, "response_map is available only after update()"
+        return self._response
+
+    @property
+    def psr(self) -> float:
+        return self._psr
