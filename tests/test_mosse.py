@@ -118,3 +118,23 @@ def test_build_filter_is_pure_and_seed_deterministic():
 
 def test_name_is_mosse():
     assert Mosse().name() == "MOSSE"
+
+
+def test_evaluate_is_pure_and_returns_centered_peak_on_build_frame():
+    frame = _blob_frame(cx=80.0, cy=60.0)
+    t = Mosse(n_warps=2)
+    box = _box_at(80, 60, 160, 120)
+    state = t.build_filter(frame, box)
+    a_before = state.arrays["A"].copy()
+
+    er = t.evaluate(frame, state)
+
+    # purity: evaluate must not mutate the state it was given
+    np.testing.assert_array_equal(state.arrays["A"], a_before)
+    th, tw = state.meta["template_size"]
+    assert er.response_map.shape == (th, tw)
+    assert np.isfinite(er.psr)
+    # matched filter on its own build frame -> peak ~ centre -> box centre ~ unchanged
+    cx, cy = er.bbox.to_pixels(160, 120).center
+    assert cx == pytest.approx(80.0, abs=1.5)
+    assert cy == pytest.approx(60.0, abs=1.5)

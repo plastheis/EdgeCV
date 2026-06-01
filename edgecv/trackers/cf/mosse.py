@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from edgecv.core.bbox import BoundingBox
+from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackStatus
 from edgecv.trackers.cf import ops
 from edgecv.trackers.cf.base import CorrelationFilterTracker, EvalResult, FilterState
@@ -180,7 +180,21 @@ class Mosse(CorrelationFilterTracker):
     # --- stubs required by abstract base (implemented in later tasks) ---
 
     def evaluate(self, frame: np.ndarray, state: FilterState) -> EvalResult:
-        raise NotImplementedError("evaluate() is implemented in Task 7")
+        th, tw = state.meta["template_size"]
+        lam = state.meta["lambda"]
+        h_img, w_img = frame.shape[0], frame.shape[1]
+        pix = state.bbox.to_pixels(w_img, h_img)
+        cx, cy = pix.center
+        window = ops.cos_window((th, tw))
+        f = ops.fft2(_preprocess(_crop_patch(frame, (cx, cy), (th, tw)), window))
+        h_conj = state.arrays["A"] / (state.arrays["B"] + lam)
+        response = np.real(ops.ifft2(f * h_conj))
+        py, px = _subpixel_peak(response)
+        new_cx = cx + (px - tw // 2)
+        new_cy = cy + (py - th // 2)
+        new_pix = PixelBox(x=new_cx - pix.w / 2.0, y=new_cy - pix.h / 2.0, w=pix.w, h=pix.h)
+        new_bbox = BoundingBox.from_pixels(new_pix, w_img, h_img)
+        return EvalResult(bbox=new_bbox, response_map=response, psr=ops.psr(response))
 
     def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:  # type: ignore[override]
         raise NotImplementedError("init() is implemented in Task 8")
