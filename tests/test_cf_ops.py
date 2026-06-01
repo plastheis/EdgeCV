@@ -18,6 +18,7 @@ from edgecv.trackers.cf.ops import (
     fft2,
     fft_backends,
     fft_size,
+    gaussian2d_labels,
     ifft2,
     psr,
     set_fft_backend,
@@ -179,3 +180,26 @@ def test_fft_size_is_monotonic_and_at_least_input():
         assert s >= n
         assert s >= prev
         prev = s
+
+
+# --- gaussian2d_labels -------------------------------------------------------
+
+
+def test_gaussian2d_labels_peaks_at_center():
+    g = gaussian2d_labels((16, 24), sigma=2.0)
+    assert g.shape == (16, 24)
+    assert g.dtype == np.float32
+    assert np.unravel_index(int(np.argmax(g)), g.shape) == (8, 12)
+    assert g[8, 12] == pytest.approx(1.0)
+
+
+def test_gaussian2d_labels_values_in_unit_interval():
+    g = gaussian2d_labels((16, 16), sigma=2.0)
+    assert g.min() > 0.0
+    assert g.max() <= 1.0
+
+
+def test_gaussian2d_labels_wider_sigma_has_more_support():
+    narrow = gaussian2d_labels((32, 32), sigma=1.0)
+    wide = gaussian2d_labels((32, 32), sigma=4.0)
+    assert (wide > 0.5).sum() > (narrow > 0.5).sum()

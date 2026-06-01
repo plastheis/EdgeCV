@@ -15,6 +15,7 @@ from edgecv.trackers.cf.ops.features import (
     feature_backends,
 )
 from edgecv.trackers.cf.ops.fft import fft2, fft_backends, fft_size, ifft2, set_fft_backend
+from edgecv.trackers.cf.ops.labels import gaussian2d_labels
 from edgecv.trackers.cf.ops.psr import psr
 from edgecv.trackers.cf.ops.window import cos_window
 
@@ -27,6 +28,7 @@ __all__ = [
     "fft2",
     "fft_backends",
     "fft_size",
+    "gaussian2d_labels",
     "ifft2",
     "psr",
     "set_fft_backend",
