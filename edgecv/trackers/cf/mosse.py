@@ -7,14 +7,9 @@ wrap)."""
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 
-from edgecv.core.bbox import BoundingBox, PixelBox
-from edgecv.core.result import TrackResult, TrackStatus
 from edgecv.trackers.cf import ops
-from edgecv.trackers.cf.base import CorrelationFilterTracker, EvalResult, FilterState
 
 
 def _crop_patch(
