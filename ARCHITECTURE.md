@@ -18,10 +18,19 @@ behind an abstraction that hides the chip-specific runtime.
 **In scope**
 - Single-object tracking (SOT). One target in, one bounding box out per `update()`.
 - An OpenCV-like tracker API: importable classes with `init()` / `update()`.
-- Numpy-based correlation-filter (CF) trackers built from fundamental ops — **not** OpenCV
-  tracker implementations. The numpy implementations in
-  [`pyCFTrackers`](https://github.com/fengyang95/pyCFTrackers) are the reference style: clean,
-  parameter-exposing, and crucially they expose the filter itself.
+- Correlation-filter (CF) trackers built from fundamental ops orchestrated in Python — **not**
+  OpenCV *tracker classes*. The exclusion is specifically `cv2.Tracker*` (KCF, CSRT, …): they are
+  sealed boxes that expose no filter, no PSR, and no build/evaluate split, so the build-elsewhere /
+  evaluate-here / swap contract (§6.1) is impossible on top of them. It is **not** a ban on
+  optimized *primitives*: the underlying ops (FFT, image crop/resize/colour-convert, HOG) may use
+  the best aarch64-available library — numpy, scipy.fft, pyFFTW, numba, or `cv2`'s op functions —
+  behind a swappable backend (§6.1). What edgecv owns is the filter state and its transferable
+  composition, never the box. The ports in
+  [`pyCFTrackers`](https://github.com/fengyang95/pyCFTrackers) are the reference for **per-tracker
+  algorithm and parameters** (faithful ports of the official MATLAB code), but note: their filters
+  live as private instance attributes with no transferable contract, and they depend on `cv2` +
+  compiled HOG. edgecv therefore reimplements the feature/FFT ops in `trackers/cf/ops/` and **adds**
+  the build/evaluate/get/set filter contract itself — neither is borrowable from pyCFTrackers.
 - Dense-network trackers (Siamese family) backed by a hardware-abstracted inference layer.
 - A backend (runtime + IPC + fusion primitives) that makes **hybrid trackers** buildable, with
   Rockchip NPUs as the first concrete target and other vendors addable behind the same interface.
@@ -193,10 +202,25 @@ have explicit lifecycle (see §7.4).
 
 ### 6.1 CF trackers (`edgecv/trackers/cf/`)
 
-Built from fundamental numpy ops orchestrated in Python — **not** OpenCV trackers. Shared ops live
-in `edgecv/trackers/cf/ops/`: FFT helpers, feature extractors (`raw` pixels, `hog`, `colornames`),
-cosine/Hann windows, and PSR. Concrete trackers (`mosse.py`, `csk.py`, `kcf.py`, `dsst.py`,
-`staple.py`, …) compose these and expose their parameters and the filter itself.
+Built from fundamental ops orchestrated in Python — **not** OpenCV tracker classes. Shared ops live
+in `edgecv/trackers/cf/ops/`: FFT helpers (`fft.py`), feature extractors (`features.py`: `raw`
+pixels, `hog`, `colornames`), cosine/Hann windows (`window.py`), and PSR (`psr.py`). Concrete
+trackers (`mosse.py`, `csk.py`, `kcf.py`, `dsst.py`, `staple.py`, …) compose these and expose their
+parameters and the filter itself.
+
+**Ops have a numpy reference + optional fast backend.** Every op ships a pure-numpy implementation
+that always works (the reference). FFT and HOG — the two hotspots — additionally expose optional
+accelerated backends selected behind a stable signature: `set_fft_backend(...)` picks
+numpy/scipy/pyFFTW (`auto` prefers scipy), and `feature_backends()` reports `numba` when present as
+the drop-in point for a jitted HOG. Nothing imports an optional lib at module load, so the base
+wheel stays numpy-only and a device build opts into faster paths with **no tracker change**. Two
+rules: ops must be module-level functions (importable in a `spawn`ed worker, §7.4), and
+`build_filter` and `evaluate` must go through the *same* ops module so a candidate filter is never
+penalised by cross-backend numerical drift (this extends the same-engine rule, §14.6). The CF-core
+language stays Python deliberately: the per-frame math already runs in compiled kernels (pocketfft,
+numba, BLAS), so a C/C++ core buys only ~1.1–1.5× on a path that already fits the frame budget
+~10–20× over, while it would break filter transferability and editability — accelerate one op behind
+this layer if profiling demands it, never the whole core.
 
 **Mandatory transferable-filter contract.** Every CF tracker subclasses
 `CorrelationFilterTracker` and implements both the online (mutating) loop *and* the pure ops:
@@ -521,12 +545,16 @@ artifacts:
 
 ## 12. Packaging and extras
 
-Core stays pure-Python + numpy so the base wheel is universal and the CF trackers need nothing
-exotic. Accelerator backends and tooling are optional extras with lazy imports.
+Core stays numpy-only so the base wheel is universal and the CF trackers run with nothing exotic.
+The "no OpenCV" rule is about *tracker classes*, not primitives (§1): optimized op libraries
+(scipy.fft, numba, pyFFTW, `opencv-python`'s op functions) are allowed but **optional** — each is
+lazily imported inside the relevant op, with a numpy reference fallback, so the base install never
+requires them. Accelerator inference backends and host tooling are likewise optional extras.
 
 | Install | Contents |
 |---|---|
 | `pip install edgecv` | Core: numpy CF trackers, runtime/IPC, fusion abstractions, `mock` backend. |
+| `pip install edgecv[fast]` | Optional CF-ops accelerators (scipy, numba, pyFFTW, opencv-python). Reference numpy ops work without it; this just selects faster FFT/HOG/image paths. |
 | `pip install edgecv[onnx]` | ONNXRuntime CPU/dev backend (NN trackers on x86). |
 | `pip install edgecv[rknn]` | Registers the RKNN backend. **`rknn-toolkit-lite2` is installed manually on the device** — it is not on PyPI, so the extra cannot pull it; document the manual step. |
 | `pip install edgecv[dev]` | Host-side conversion/training helpers and their heavy deps (pytracking, etc.). |

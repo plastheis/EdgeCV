@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional CF-ops accelerators. The numpy reference ops work without these;
+# installing them just selects faster FFT/HOG/image paths (ARCHITECTURE.md §6.1, §12).
+fast = ["scipy>=1.10", "numba>=0.58", "pyFFTW>=0.13", "opencv-python>=4.8"]
 onnx = ["onnxruntime>=1.16"]
 # rknn-toolkit-lite2 is NOT on PyPI; install it manually on-device.
 # This extra exists only to signal intent — see README.
