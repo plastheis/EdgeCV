@@ -71,3 +71,116 @@ def status_color(status: TrackStatus) -> tuple[int, int, int]:
     if status == TrackStatus.LOST:
         return RED
     return ORANGE  # LOCKED / INITIALIZING -> nominal
+
+
+# --- rendering (cv2) ---
+def _draw_box(display, pix: PixelBox, color: tuple[int, int, int], thickness: int = 2) -> None:
+    x0, y0 = int(round(pix.x)), int(round(pix.y))
+    x1, y1 = int(round(pix.x + pix.w)), int(round(pix.y + pix.h))
+    cv2.rectangle(display, (x0, y0), (x1, y1), color, thickness)
+
+
+def _draw_hud(
+    display, name: str, status_text: str, psr: float | None, fps: float
+) -> None:
+    psr_text = f"{psr:.1f}" if psr is not None else "--"
+    line1 = f"{name} | PSR {psr_text} | {status_text} | {fps:.0f} FPS"
+    line2 = "[space] lock  [r] release  [+/-] size  [q] quit"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for text, y, scale in ((line1, 24, 0.6), (line2, 48, 0.5)):
+        cv2.putText(display, text, (10, y), font, scale, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(display, text, (10, y), font, scale, WHITE, 1, cv2.LINE_AA)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Qualitatively test edgecv trackers on a live webcam."
+    )
+    parser.add_argument("--camera", type=int, default=0, help="VideoCapture index (default 0)")
+    parser.add_argument(
+        "--tracker", choices=sorted(TRACKERS), default="mosse", help="tracker to run"
+    )
+    parser.add_argument("--width", type=int, default=None, help="requested capture width")
+    parser.add_argument("--height", type=int, default=None, help="requested capture height")
+    parser.add_argument("--list", action="store_true", help="list trackers and exit")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    if args.list:
+        print("\n".join(sorted(TRACKERS)))
+        return 0
+    if cv2 is None:
+        print(
+            "opencv-python is required for this host tool: pip install opencv-python",
+            file=sys.stderr,
+        )
+        return 1
+
+    cap = cv2.VideoCapture(args.camera)
+    if args.width:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+    if args.height:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    if not cap.isOpened():
+        print(f"could not open camera index {args.camera}", file=sys.stderr)
+        return 1
+
+    make_tracker = TRACKERS[args.tracker]
+    tracker: Tracker | None = None
+    box_px = DEFAULT_BOX_PX
+    fps = 0.0
+    last = time.monotonic()
+    win = "edgecv tracker"
+    cv2.namedWindow(win)
+    try:
+        while True:
+            ok, bgr = cap.read()
+            if not ok:
+                print("camera read failed", file=sys.stderr)
+                return 1
+            h, w = bgr.shape[:2]
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)  # tracker sees RGB (luma weights)
+            display = bgr.copy()                        # overlays only; never fed back
+
+            now = time.monotonic()
+            dt = now - last
+            last = now
+            if dt > 0:
+                inst = 1.0 / dt
+                fps = inst if fps == 0.0 else 0.9 * fps + 0.1 * inst
+
+            if tracker is None:
+                box_px = clamp_box_size(box_px, h, w)
+                _draw_box(display, centered_square(h, w, box_px), WHITE)
+                _draw_hud(display, args.tracker.upper(), "SETUP", None, fps)
+            else:
+                result = tracker.update(rgb)
+                if result.bbox is not None:
+                    _draw_box(display, result.bbox.to_pixels(w, h), status_color(result.status))
+                _draw_hud(display, tracker.name(), result.status.name, result.confidence, fps)
+
+            cv2.imshow(win, display)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            elif key == ord("r"):
+                tracker = None
+            elif key == ord(" ") and tracker is None:
+                box_px = clamp_box_size(box_px, h, w)
+                bbox = BoundingBox.from_pixels(centered_square(h, w, box_px), w, h)
+                tracker = make_tracker()
+                tracker.init(rgb, bbox)
+            elif key in (ord("+"), ord("=")) and tracker is None:
+                box_px = clamp_box_size(box_px + BOX_STEP_PX, h, w)
+            elif key in (ord("-"), ord("_")) and tracker is None:
+                box_px = clamp_box_size(box_px - BOX_STEP_PX, h, w)
+        return 0
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
