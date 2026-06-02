@@ -205,3 +205,33 @@ def test_update_on_noise_reports_lost_and_freezes_filter():
     res = t.update(noise)
     assert res.status == TrackStatus.LOST
     np.testing.assert_array_equal(t.get_filter().arrays["A"], a_before)
+
+
+# --- Output-box clamping policy (deliberate "won't clamp") --------------------
+# A target that is partially off-frame has coordinates legitimately outside [0,1].
+# We report them truthfully (so the motion predictor, ARCHITECTURE.md §9, sees a
+# real velocity) and we never shrink the box to fit (MOSSE is no-scale: output w,h
+# must equal the init box). These two tests fence that decision: they pass today
+# and would FAIL if anyone clamped the output (e.g. via BoundingBox.clamp(), which
+# both pins coords into [0,1] and shrinks w,h). Untrustworthiness is signalled by
+# `status`, not by mangling geometry — see test_update_on_noise_* above.
+
+
+def test_update_reports_unclamped_offframe_box_at_left_edge():
+    box = _box_at(8, 60, 160, 120)               # centre at x=8px -> normalised x < 0
+    t = Mosse(n_warps=2)
+    t.init(_blob_frame(cx=8.0, cy=60.0), box)
+    res = t.update(_blob_frame(cx=8.0, cy=60.0))
+    assert res.bbox.x < 0.0                        # truthful, not clamped to 0
+    assert res.bbox.w == pytest.approx(box.w)      # size preserved (no shrink)
+    assert res.bbox.h == pytest.approx(box.h)
+
+
+def test_update_preserves_box_size_past_right_edge():
+    box = _box_at(152, 60, 160, 120)             # x + w > 1 (extends past right edge)
+    t = Mosse(n_warps=2)
+    t.init(_blob_frame(cx=152.0, cy=60.0), box)
+    res = t.update(_blob_frame(cx=152.0, cy=60.0))
+    assert res.bbox.x + res.bbox.w > 1.0           # truthful overflow, not clamped
+    assert res.bbox.w == pytest.approx(box.w)      # clamp() would shrink w to 1 - x
+    assert res.bbox.h == pytest.approx(box.h)

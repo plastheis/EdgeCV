@@ -58,7 +58,15 @@ class BoundingBox:
         return (self.x + self.w / 2.0, self.y + self.h / 2.0)
 
     def clamp(self) -> BoundingBox:
-        """Return a copy fully contained in the unit square."""
+        """Return a copy fully contained in the unit square.
+
+        Note: this both pins x,y into [0,1] AND shrinks w,h to fit. It is therefore
+        lossy for off-frame boxes and must NOT be used on a fixed-size (no-scale)
+        tracker's output — that would silently violate the "output w,h == init box"
+        invariant. CF trackers report off-frame coordinates truthfully (the motion
+        predictor, ARCHITECTURE.md §9, needs the real position); clamp only at a
+        rendering/consumption boundary that genuinely requires a drawable box.
+        """
         x = min(max(self.x, 0.0), 1.0)
         y = min(max(self.y, 0.0), 1.0)
         w = min(self.w, 1.0 - x)
