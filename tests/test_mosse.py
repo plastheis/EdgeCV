@@ -172,3 +172,36 @@ def test_get_set_round_trip_preserves_evaluation():
     er2 = t.evaluate(frame, t.get_filter())
     np.testing.assert_allclose(
         er1.bbox.to_pixels(160, 120).center, er2.bbox.to_pixels(160, 120).center, atol=1e-6)
+
+
+def test_update_tracks_translating_blob():
+    t = Mosse(n_warps=4)
+    t.init(_blob_frame(cx=80.0, cy=60.0), _box_at(80, 60, 160, 120))
+    true_cx, true_cy = 80.0, 60.0
+    for _ in range(5):
+        true_cx += 3.0
+        true_cy += 2.0
+        res = t.update(_blob_frame(cx=true_cx, cy=true_cy))
+    cx, cy = res.bbox.to_pixels(160, 120).center
+    assert cx == pytest.approx(true_cx, abs=3.0)
+    assert cy == pytest.approx(true_cy, abs=3.0)
+    assert res.status == TrackStatus.LOCKED
+    assert res.seq == 5
+
+
+def test_update_resolves_subpixel_shift():
+    t = Mosse(n_warps=4)
+    t.init(_blob_frame(cx=80.0, cy=60.0), _box_at(80, 60, 160, 120))
+    res = t.update(_blob_frame(cx=80.5, cy=60.0))
+    cx, _ = res.bbox.to_pixels(160, 120).center
+    assert 80.2 < cx < 80.8   # fractional, not snapped to an integer pixel
+
+
+def test_update_on_noise_reports_lost_and_freezes_filter():
+    t = Mosse(n_warps=4)
+    t.init(_blob_frame(cx=80.0, cy=60.0), _box_at(80, 60, 160, 120))
+    a_before = t.get_filter().arrays["A"].copy()
+    noise = (np.random.default_rng(0).integers(0, 256, (120, 160, 3))).astype(np.uint8)
+    res = t.update(noise)
+    assert res.status == TrackStatus.LOST
+    np.testing.assert_array_equal(t.get_filter().arrays["A"], a_before)

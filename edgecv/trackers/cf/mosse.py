@@ -7,10 +7,12 @@ wrap)."""
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from edgecv.core.bbox import BoundingBox, PixelBox
-from edgecv.core.result import TrackStatus
+from edgecv.core.result import TrackResult, TrackStatus
 from edgecv.trackers.cf import ops
 from edgecv.trackers.cf.base import CorrelationFilterTracker, EvalResult, FilterState
 
@@ -219,8 +221,29 @@ class Mosse(CorrelationFilterTracker):
             return TrackStatus.COASTING
         return TrackStatus.LOST
 
-    def update(self, frame: np.ndarray) -> None:  # type: ignore[override]
-        raise NotImplementedError("update() is implemented in Task 9")
+    def update(self, frame: np.ndarray) -> TrackResult:
+        assert self._state is not None and self._G is not None, "init() must run before update()"
+        er = self.evaluate(frame, self._state)
+        self._response = er.response_map
+        self._psr = er.psr
+        self._status = self._status_from(er.psr)
+        self._state.bbox = er.bbox
+        if er.psr >= self._psr_lost:
+            th, tw = self._state.meta["template_size"]
+            h_img, w_img = frame.shape[0], frame.shape[1]
+            cx, cy = er.bbox.to_pixels(w_img, h_img).center
+            window = ops.cos_window((th, tw))
+            f = ops.fft2(_preprocess(_crop_patch(frame, (cx, cy), (th, tw)), window))
+            a_new = self._G * np.conj(f)
+            b_new = f * np.conj(f)
+            eta = self._eta
+            self._state.arrays["A"] = (
+                eta * a_new + (1.0 - eta) * self._state.arrays["A"]).astype(np.complex64)
+            self._state.arrays["B"] = (
+                eta * b_new + (1.0 - eta) * self._state.arrays["B"]).astype(np.complex64)
+        self._seq += 1
+        return TrackResult(bbox=er.bbox, confidence=er.psr, status=self._status,
+                           timestamp=time.monotonic(), seq=self._seq)
 
     @property
     def status(self) -> TrackStatus:
