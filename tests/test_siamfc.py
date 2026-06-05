@@ -31,7 +31,7 @@ def test_init_builds_127_exemplar_template():
     t = _siam([{"score_map": score_map_peaked(SS, 8, 8)}])
     t.init(_frame(), _box())
     z = t.get_template().arrays["exemplar"]
-    assert z.shape == (1, 1, 127, 127)
+    assert z.shape == (1, 3, 127, 127)
     assert t.status == TrackStatus.LOCKED
 
 

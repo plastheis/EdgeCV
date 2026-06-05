@@ -12,7 +12,7 @@ import numpy as np
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackResult, TrackStatus
 from edgecv.trackers.cf.ops import psr
-from edgecv.trackers.nn.base import NNTracker, Template
+from edgecv.trackers.nn.base import UNSET, NNTracker, Template, resolve_pp
 from edgecv.trackers.nn.preprocess import crop_with_context, resize_bilinear, to_input
 
 
@@ -28,7 +28,7 @@ class SiamFC(NNTracker):
                  exemplar_size=127, search_size=255, context=0.5,
                  total_stride=8, response_up=16, scale_num=3, scale_step=1.0375,
                  scale_penalty=0.9745, scale_lr=0.59, window_influence=0.176,
-                 color="gray", score_lock=8.0, score_lost=4.0) -> None:
+                 color=UNSET, scale=UNSET, score_lock=8.0, score_lost=4.0) -> None:
         super().__init__(manifest, backend=backend, model=model)
         self._exemplar_size = exemplar_size
         self._search_size = search_size
@@ -40,7 +40,8 @@ class SiamFC(NNTracker):
         self._scale_penalty = scale_penalty
         self._scale_lr = scale_lr
         self._window_influence = window_influence
-        self._color = color
+        self._color = resolve_pp(color, self._preprocessing, "color", "rgb")
+        self._scale = resolve_pp(scale, self._preprocessing, "scale", 1.0)
         self._score_lock = score_lock
         self._score_lost = score_lost
         out = self._model.io_spec.outputs[0]
@@ -74,7 +75,7 @@ class SiamFC(NNTracker):
         patch, _ = crop_with_context(frame, pix.center, (s_z, s_z),
                                      (self._exemplar_size, self._exemplar_size))
         spec_z = self._model.io_spec.inputs[0]
-        z = to_input(patch, spec_z, color=self._color)
+        z = to_input(patch, spec_z, color=self._color, scale=self._scale)
         self._template = Template(arrays={"exemplar": z}, bbox=bbox, meta={"s_z": s_z})
         self._box = bbox
         self._status = TrackStatus.LOCKED
@@ -104,7 +105,7 @@ class SiamFC(NNTracker):
             side = s_x * f
             patch, _ = crop_with_context(frame, (cx, cy), (side, side),
                                          (self._search_size, self._search_size))
-            x = to_input(patch, spec_x, color=self._color)
+            x = to_input(patch, spec_x, color=self._color, scale=self._scale)
             raw = self._model.infer({"exemplar": z, "search": x})[self._out_name]
             smap = np.asarray(raw, np.float32).reshape(self._score_size, self._score_size)
             up = resize_bilinear(smap[..., None], (self._up_size, self._up_size))[..., 0]

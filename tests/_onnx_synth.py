@@ -9,17 +9,20 @@ from onnx import TensorProto, helper, numpy_helper
 
 
 def build_siamfc_onnx(path: str, score_size: int = 17) -> None:
-    ex = helper.make_tensor_value_info("exemplar", TensorProto.FLOAT, [1, 1, 127, 127])
-    se = helper.make_tensor_value_info("search", TensorProto.FLOAT, [1, 1, 255, 255])
+    ex = helper.make_tensor_value_info("exemplar", TensorProto.FLOAT, [1, 3, 127, 127])
+    se = helper.make_tensor_value_info("search", TensorProto.FLOAT, [1, 3, 255, 255])
     sc = helper.make_tensor_value_info(
         "score_map", TensorProto.FLOAT, [1, 1, score_size, score_size]
     )
-    # AveragePool(255, k=15, s=15) -> 17x17; add scalar mean(exemplar) so both inputs are used.
+    # AveragePool(255, k=15, s=15) -> [1,3,17,17]; mean over channels -> [1,1,17,17];
+    # add scalar mean(exemplar) so both inputs are consumed.
     pool = helper.make_node("AveragePool", ["search"], ["pooled"],
                             kernel_shape=[15, 15], strides=[15, 15])
+    redc = helper.make_node("ReduceMean", ["pooled"], ["pooled_c"],
+                            axes=[1], keepdims=1)            # [1,1,17,17]
     rm = helper.make_node("ReduceMean", ["exemplar"], ["ex_mean"], keepdims=0)  # scalar
-    add = helper.make_node("Add", ["pooled", "ex_mean"], ["score_map"])
-    graph = helper.make_graph([pool, rm, add], "siamfc_stub", [ex, se], [sc])
+    add = helper.make_node("Add", ["pooled_c", "ex_mean"], ["score_map"])
+    graph = helper.make_graph([pool, redc, rm, add], "siamfc_stub", [ex, se], [sc])
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
     onnx.checker.check_model(model)
     onnx.save(model, path)

@@ -34,8 +34,8 @@ class ScriptedModel(Model):
 
 def siam_io(score_size: int = 17) -> IOSpec:
     return IOSpec(
-        inputs=(TensorSpec("exemplar", (1, 1, 127, 127), "float32"),
-                TensorSpec("search", (1, 1, 255, 255), "float32")),
+        inputs=(TensorSpec("exemplar", (1, 3, 127, 127), "float32"),
+                TensorSpec("search", (1, 3, 255, 255), "float32")),
         outputs=(TensorSpec("score_map", (1, 1, score_size, score_size), "float32"),))
 
 

@@ -10,7 +10,7 @@ def test_siamfc_manifest_loads():
     assert m.name == "siamfc_generic"
     assert {i["name"] for i in m.inputs} == {"exemplar", "search"}
     assert m.outputs[0]["name"] == "score_map"
-    assert m.preprocessing["color"] == "gray"
+    assert m.preprocessing["color"] == "rgb"
 
 
 def test_yolo_manifest_loads():
