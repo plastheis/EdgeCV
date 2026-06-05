@@ -1,8 +1,14 @@
 import numpy as np
 import pytest
 
-from edgecv.trackers.nn.preprocess import class_agnostic_nms, crop_with_context, letterbox, resize_bilinear, to_input
 from edgecv.backends.base import TensorSpec
+from edgecv.trackers.nn.preprocess import (
+    class_agnostic_nms,
+    crop_with_context,
+    letterbox,
+    resize_bilinear,
+    to_input,
+)
 
 
 def test_resize_bilinear_identity():

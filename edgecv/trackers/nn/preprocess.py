@@ -133,7 +133,8 @@ def to_input(patch: np.ndarray, spec: TensorSpec, *, color: str = "rgb",
         img = img[..., None]
     img = img * scale
     if mean is not None:
-        img = (img - np.asarray(mean, np.float32)) / np.asarray(std, np.float32)
+        img = ((img - np.asarray(mean, np.float32))
+               / np.asarray(std, np.float32)).astype(np.float32)
     chw = np.transpose(img, (2, 0, 1))[None]          # 1,C,H,W
     if spec.quant:
         q = np.round(chw / spec.quant["scale"]) + spec.quant["zero_point"]
