@@ -23,12 +23,13 @@ from edgecv.trackers.nn.preprocess import (
 
 
 class YoloDetector:
-    """Boxes in the returned DetectorOutput are (N,4) normalised xywh top-left."""
+    """Boxes in the returned DetectorOutput are (N,4) normalised xywh top-left,
+    normalised to the image passed to detect()."""
 
     def __init__(self, manifest=None, *, backend="auto", model=None,
                  input_size=640, color="rgb", scale=1.0 / 255.0,
-                 output_format="yolov5", conf_thresh=0.25, iou_thresh=0.45,
-                 class_agnostic=True) -> None:
+                 output_format="yolov5", conf_thresh=0.25, iou_thresh=0.45) -> None:
+        self._owns_model = model is None
         self._model = resolve_model(manifest, backend, model)
         self._input_size = input_size
         self._color = color
@@ -36,7 +37,6 @@ class YoloDetector:
         self._output_format = output_format
         self._conf = conf_thresh
         self._iou = iou_thresh
-        self._class_agnostic = class_agnostic
         self._spec = self._model.io_spec.inputs[0]
         self._out_name = self._model.io_spec.outputs[0].name
 
@@ -51,6 +51,7 @@ class YoloDetector:
             return DetectorOutput(boxes=np.empty((0, 4), np.float32),
                                   scores=np.empty((0,), np.float32))
         if self._output_format == "yolov5":
+            # yolov5 row layout: [cx, cy, w, h | obj | cls_0..cls_{nc-1}]
             xywh, obj, cls = preds[:, :4], preds[:, 4], preds[:, 5:]
             score = obj * (cls.max(axis=1) if cls.shape[1] > 0 else 1.0)
         else:  # "decoded": model already emits xywh + score
@@ -73,7 +74,8 @@ class YoloDetector:
         return DetectorOutput(boxes=boxes, scores=score.astype(np.float32))
 
     def close(self) -> None:
-        self._model.close()
+        if self._owns_model:
+            self._model.close()
 
 
 class YoloTracker(NNTracker):
@@ -114,7 +116,9 @@ class YoloTracker(NNTracker):
         best, best_w = None, -1.0
         sigma = self._assoc_sigma * max(pix.w, pix.h) + 1e-6
         for box_n, sc in zip(det.boxes, det.scores, strict=False):
-            # crop-normalised xywh -> crop-out px -> frame px (via xf.to_frame)
+            # crop-normalised xywh -> crop-out px -> frame px via xf.to_frame.
+            # to_frame treats indices as pixel centres, so corners carry a
+            # sub-pixel (<1px) drift — negligible for proximity association.
             ox1, oy1 = box_n[0] * n, box_n[1] * n
             ox2, oy2 = (box_n[0] + box_n[2]) * n, (box_n[1] + box_n[3]) * n
             fx1, fy1 = xf.to_frame((ox1, oy1))
