@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from edgecv.backends.base import IOSpec, TensorSpec
-from edgecv.trackers.nn.yolo import YoloDetector
+from edgecv.core.bbox import BoundingBox
+from edgecv.core.result import TrackStatus
+from edgecv.trackers.nn.yolo import YoloDetector, YoloTracker
 from tests._nn_stubs import ScriptedModel
 
 IN = 64  # small model input for tests
@@ -50,3 +52,50 @@ def test_detect_thresholds_low_confidence():
     det = _detector(_raw([(32, 32, 16, 16, 0.1, 0)]), conf_thresh=0.25)
     out = det.detect(np.zeros((IN, IN, 3), np.uint8))
     assert len(out.scores) == 0
+
+
+FH, FW = 240, 320
+
+
+def _tracker(maps, **kw):
+    m = ScriptedModel(_yolo_io(), maps)
+    return YoloTracker(model=m, input_size=IN, **kw)
+
+
+def _box(cx, cy, w=40, h=40):
+    return BoundingBox(x=(cx - w / 2) / FW, y=(cy - h / 2) / FH, w=w / FW, h=h / FH)
+
+
+def test_yolo_tracker_name():
+    assert _tracker([_raw([])]).name() == "YOLO"
+
+
+def test_association_prefers_near_over_far_highscore():
+    # crop is centred on prev box (160,120). Two detections inside the crop:
+    # one near crop-centre with decent score, one far corner with higher score.
+    near = (IN / 2, IN / 2, 16, 16, 0.6, 0)
+    far = (4, 4, 8, 8, 0.95, 1)
+    t = _tracker([_raw([near, far])], assoc_sigma=0.5)
+    t.init(np.zeros((FH, FW, 3), np.uint8), _box(160, 120))
+    res = t.update(np.zeros((FH, FW, 3), np.uint8))
+    cx, cy = res.bbox.to_pixels(FW, FH).center
+    assert abs(cx - 160) < 30 and abs(cy - 120) < 30   # picked the near one
+    assert res.status == TrackStatus.LOCKED
+
+
+def test_box_adapts_to_detection_size():
+    t = _tracker([_raw([(IN / 2, IN / 2, 32, 16, 0.9, 0)])])
+    t.init(np.zeros((FH, FW, 3), np.uint8), _box(160, 120, w=40, h=40))
+    res = t.update(np.zeros((FH, FW, 3), np.uint8))
+    # detection is 2:1 (w:h); output aspect should differ from the square init box
+    assert res.bbox.w > res.bbox.h
+
+
+def test_misses_coast_then_lost():
+    t = _tracker([_raw([]), _raw([]), _raw([])], max_misses=2)
+    t.init(np.zeros((FH, FW, 3), np.uint8), _box(160, 120))
+    r1 = t.update(np.zeros((FH, FW, 3), np.uint8))
+    assert r1.status == TrackStatus.COASTING
+    t.update(np.zeros((FH, FW, 3), np.uint8))
+    r3 = t.update(np.zeros((FH, FW, 3), np.uint8))
+    assert r3.status == TrackStatus.LOST

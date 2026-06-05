@@ -74,3 +74,69 @@ class YoloDetector:
 
     def close(self) -> None:
         self._model.close()
+
+
+class YoloTracker(NNTracker):
+    def __init__(self, manifest=None, *, backend="auto", model=None,
+                 search_factor=3.0, assoc_sigma=0.5, conf_thresh=0.25,
+                 iou_thresh=0.45, max_misses=5, input_size=640,
+                 color="rgb", scale=1.0 / 255.0, output_format="yolov5") -> None:
+        super().__init__(manifest, backend=backend, model=model)
+        self._detector = YoloDetector(
+            model=self._model, input_size=input_size, color=color, scale=scale,
+            output_format=output_format, conf_thresh=conf_thresh, iou_thresh=iou_thresh)
+        self._search_factor = search_factor
+        self._assoc_sigma = assoc_sigma
+        self._max_misses = max_misses
+        self._input_size = input_size
+        self._box: BoundingBox | None = None
+        self._misses = 0
+
+    def name(self) -> str:
+        return "YOLO"
+
+    def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:
+        self._box = bbox
+        self._status = TrackStatus.LOCKED
+        self._misses = 0
+        self._seq = 0
+
+    def update(self, frame: np.ndarray) -> TrackResult:
+        assert self._box is not None, "init() first"
+        h_img, w_img = frame.shape[0], frame.shape[1]
+        pix = self._box.to_pixels(w_img, h_img)
+        cx, cy = pix.center
+        side = self._search_factor * max(pix.w, pix.h)
+        n = self._input_size
+        crop, xf = crop_with_context(frame, (cx, cy), (side, side), (n, n))
+        det = self._detector.detect(crop)
+
+        best, best_w = None, -1.0
+        sigma = self._assoc_sigma * max(pix.w, pix.h) + 1e-6
+        for box_n, sc in zip(det.boxes, det.scores, strict=False):
+            # crop-normalised xywh -> crop-out px -> frame px (via xf.to_frame)
+            ox1, oy1 = box_n[0] * n, box_n[1] * n
+            ox2, oy2 = (box_n[0] + box_n[2]) * n, (box_n[1] + box_n[3]) * n
+            fx1, fy1 = xf.to_frame((ox1, oy1))
+            fx2, fy2 = xf.to_frame((ox2, oy2))
+            dcx, dcy = (fx1 + fx2) / 2.0, (fy1 + fy2) / 2.0
+            dist2 = (dcx - cx) ** 2 + (dcy - cy) ** 2
+            w = float(sc) * float(np.exp(-0.5 * dist2 / (sigma * sigma)))
+            if w > best_w:
+                best_w, best = w, (fx1, fy1, fx2 - fx1, fy2 - fy1, float(sc))
+
+        if best is None:
+            self._misses += 1
+            self._status = TrackStatus.LOST if self._misses > self._max_misses \
+                else TrackStatus.COASTING
+            self._seq += 1
+            return TrackResult(bbox=self._box, confidence=None, status=self._status,
+                               timestamp=time.monotonic(), seq=self._seq)
+
+        fx, fy, fw, fh, score = best
+        self._box = BoundingBox.from_pixels(PixelBox(x=fx, y=fy, w=fw, h=fh), w_img, h_img)
+        self._misses = 0
+        self._status = TrackStatus.LOCKED
+        self._seq += 1
+        return TrackResult(bbox=self._box, confidence=score, status=self._status,
+                           timestamp=time.monotonic(), seq=self._seq)
