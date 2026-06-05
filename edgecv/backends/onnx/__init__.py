@@ -7,6 +7,7 @@ import numpy as np
 
 from edgecv.backends.base import InferenceBackend, IOSpec, Model, TensorSpec
 from edgecv.models.manifest import ModelManifest
+from edgecv.models.paths import resolve_artifact_path
 
 # ONNX tensor element type -> numpy dtype name (the common subset).
 _ORT_TO_NP = {
@@ -73,6 +74,6 @@ class OnnxBackend(InferenceBackend):
         if not artifact or "path" not in artifact:
             raise ValueError(f"manifest {manifest.name!r} has no onnx artifact path")
         session = ort.InferenceSession(
-            artifact["path"], providers=["CPUExecutionProvider"]
+            resolve_artifact_path(artifact["path"]), providers=["CPUExecutionProvider"]
         )
         return OnnxModel(session)

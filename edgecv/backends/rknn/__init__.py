@@ -14,6 +14,7 @@ from edgecv.backends.base import (
     TensorSpec,
 )
 from edgecv.models.manifest import ModelManifest
+from edgecv.models.paths import resolve_artifact_path
 
 _INSTALL_HINT = (
     "rknn-toolkit-lite2 is not available. It is not on PyPI; install it manually "
@@ -86,11 +87,12 @@ class RknnBackend(InferenceBackend):
         if not artifact or "path" not in artifact:
             raise ValueError(f"manifest {manifest.name!r} has no rknn artifact path")
         rknn = rknn_lite()
-        if rknn.load_rknn(artifact["path"]) != 0:
-            raise RuntimeError(f"failed to load rknn model {artifact['path']!r}")
+        resolved = resolve_artifact_path(artifact["path"])
+        if rknn.load_rknn(resolved) != 0:
+            raise RuntimeError(f"failed to load rknn model {resolved!r}")
         core_mask = artifact.get("npu_core") or 0
         if rknn.init_runtime(core_mask=core_mask) != 0:
-            raise RuntimeError(f"rknn init_runtime failed for {artifact['path']!r}")
+            raise RuntimeError(f"rknn init_runtime failed for {resolved!r}")
         io_spec = IOSpec(
             inputs=_specs(manifest.inputs),
             outputs=_specs(manifest.outputs),
