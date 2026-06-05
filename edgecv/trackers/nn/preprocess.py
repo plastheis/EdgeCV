@@ -58,6 +58,40 @@ class CropXform:
         return fx, fy
 
 
+@dataclass(frozen=True)
+class LetterboxXform:
+    scale: float                   # uniform resize factor applied to the original
+    pad: tuple[float, float]       # (pad_x, pad_y) added in output px
+    out_size: tuple[int, int]      # (oh, ow)
+    orig_size: tuple[int, int]     # (h, w)
+
+    def to_orig_xyxy(self, xyxy: tuple[float, float, float, float]):
+        x1, y1, x2, y2 = xyxy
+        px, py = self.pad
+        s = self.scale
+        return ((x1 - px) / s, (y1 - py) / s, (x2 - px) / s, (y2 - py) / s)
+
+
+def letterbox(
+    image: np.ndarray, out_size: tuple[int, int], *, pad_value: float = 114.0
+) -> tuple[np.ndarray, LetterboxXform]:
+    """Aspect-preserving resize + symmetric pad into out_size (YOLO convention)."""
+    oh, ow = out_size
+    h, w = image.shape[0], image.shape[1]
+    s = min(oh / h, ow / w)
+    nh, nw = int(round(h * s)), int(round(w * s))
+    resized = resize_bilinear(image, (nh, nw))
+    ch = image.shape[2] if image.ndim == 3 else 1
+    canvas = np.full((oh, ow, ch), pad_value, np.float32)
+    pad_y = (oh - nh) / 2.0
+    pad_x = (ow - nw) / 2.0
+    y0, x0 = int(round(pad_y)), int(round(pad_x))
+    block = resized if resized.ndim == 3 else resized[..., None]
+    canvas[y0:y0 + nh, x0:x0 + nw] = block
+    out = canvas if image.ndim == 3 else canvas[..., 0]
+    return out, LetterboxXform(s, (float(x0), float(y0)), (oh, ow), (h, w))
+
+
 def crop_with_context(
     frame: np.ndarray,
     center: tuple[float, float],

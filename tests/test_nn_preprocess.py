@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from edgecv.trackers.nn.preprocess import crop_with_context, resize_bilinear
+from edgecv.trackers.nn.preprocess import crop_with_context, letterbox, resize_bilinear
 
 
 def test_resize_bilinear_identity():
@@ -39,3 +39,22 @@ def test_crop_xform_to_frame_roundtrip():
     fx, fy = xf.to_frame((32.0 - 0.5, 16.0 - 0.5))  # (ow/2-0.5, oh/2-0.5)
     assert fx == pytest.approx(25.0, abs=1e-6)
     assert fy == pytest.approx(30.0, abs=1e-6)
+
+
+def test_letterbox_preserves_aspect_and_pads():
+    img = np.zeros((50, 100, 3), np.uint8)  # 2:1 wide
+    out, xf = letterbox(img, (64, 64), pad_value=114)
+    assert out.shape == (64, 64, 3)
+    # 100->64 sets scale 0.64; height 50*0.64=32, padded symmetrically in 64
+    assert xf.scale == pytest.approx(0.64)
+    assert xf.pad[1] == pytest.approx((64 - 32) / 2.0)  # vertical pad
+
+
+def test_letterbox_inverts_box():
+    img = np.zeros((50, 100, 3), np.uint8)
+    _, xf = letterbox(img, (64, 64))
+    # a box covering the whole original maps from the unpadded letterbox region
+    px, py = xf.pad
+    s = xf.scale
+    x1, y1, x2, y2 = xf.to_orig_xyxy((px, py, px + 100 * s, py + 50 * s))
+    assert (x1, y1, x2, y2) == pytest.approx((0.0, 0.0, 100.0, 50.0), abs=1e-4)
