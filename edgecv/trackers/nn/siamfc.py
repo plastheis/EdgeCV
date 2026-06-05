@@ -99,7 +99,7 @@ class SiamFC(NNTracker):
 
         centre = self._scale_num // 2
         scales = self._scale_step ** (np.arange(self._scale_num) - centre)
-        best = None  # (idx, factor, up_norm, peak, raw_map)
+        best = None  # (idx, factor, up, penalised_peak, raw_smap)
         for i, f in enumerate(scales):
             side = s_x * f
             patch, _ = crop_with_context(frame, (cx, cy), (side, side),
@@ -113,7 +113,8 @@ class SiamFC(NNTracker):
             if best is None or peak > best[3]:
                 best = (i, float(f), up, peak, smap)
 
-        idx, factor, up, _peak, smap = best
+        assert best is not None, "scale_num must be >= 1"
+        _idx, factor, up, _peak, smap = best
         total = up.sum()
         resp = up / total if total > 0 else up
         resp = (1.0 - self._window_influence) * resp + self._window_influence * self._hann
