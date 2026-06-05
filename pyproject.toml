@@ -39,6 +39,7 @@ packages = ["edgecv"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "edgecv/models/profiles" = "edgecv/models/profiles"
+"edgecv/models/manifests" = "edgecv/models/manifests"
 
 [tool.ruff]
 line-length = 100
