@@ -15,6 +15,28 @@ from edgecv.core.result import TrackResult, TrackStatus
 from edgecv.core.tracker import Tracker
 from edgecv.models.manifest import ModelManifest, load_manifest
 
+UNSET = object()  # sentinel: "__init__ kwarg not explicitly passed"
+
+
+def resolve_pp(value, manifest_pp: dict, key: str, default):
+    """Precedence: explicit kwarg > manifest preprocessing > hardcoded default
+    (ARCHITECTURE.md §10.1; nn-trackers design §7)."""
+    if value is not UNSET:
+        return value
+    if key in manifest_pp:
+        return manifest_pp[key]
+    return default
+
+
+def manifest_preprocessing(
+    manifest: ModelManifest | str | Path | None,
+) -> dict:
+    """The preprocessing dict for a manifest (path, object, or None)."""
+    if manifest is None:
+        return {}
+    mf = manifest if isinstance(manifest, ModelManifest) else load_manifest(manifest)
+    return dict(mf.preprocessing)
+
 
 @dataclass
 class Template:
@@ -54,6 +76,7 @@ def resolve_model(
 class NNTracker(Tracker):
     def __init__(self, manifest: ModelManifest | str | Path | None = None, *,
                  backend: str = "auto", model: Model | None = None) -> None:
+        self._preprocessing: dict = manifest_preprocessing(manifest)
         self._model: Model = resolve_model(manifest, backend, model)
         self._status: TrackStatus = TrackStatus.INITIALIZING
         self._seq: int = 0
