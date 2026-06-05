@@ -42,3 +42,11 @@ def test_auto_with_no_real_backend_raises_never_mock(monkeypatch):
     monkeypatch.setattr(base, "available_backends", lambda: ["mock"])
     with pytest.raises(RuntimeError, match="no inference backend"):
         NNTracker("edgecv/models/manifests/yolo_generic.yaml", backend="auto")
+
+
+def test_rknn_unavailable_off_device_is_clean():
+    from edgecv.backends.registry import get_backend
+    be = get_backend("rknn")
+    if be.is_available():            # on a real device
+        pytest.skip("rknn runtime present; load tested on-device manually")
+    assert be.is_available() is False

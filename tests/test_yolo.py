@@ -99,3 +99,10 @@ def test_misses_coast_then_lost():
     t.update(np.zeros((FH, FW, 3), np.uint8))
     r3 = t.update(np.zeros((FH, FW, 3), np.uint8))
     assert r3.status == TrackStatus.LOST
+
+
+def test_nn_package_exports():
+    import edgecv.trackers.nn as nn
+    assert hasattr(nn, "SiamFC")
+    assert hasattr(nn, "YoloTracker")
+    assert hasattr(nn, "YoloDetector")

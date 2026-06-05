@@ -77,3 +77,10 @@ def test_low_response_reports_lost():
     t.init(_frame(), _box())
     res = t.update(_frame())
     assert res.status == TrackStatus.LOST
+
+
+def test_nn_package_exports():
+    import edgecv.trackers.nn as nn
+    assert hasattr(nn, "SiamFC")
+    assert hasattr(nn, "YoloTracker")
+    assert hasattr(nn, "YoloDetector")
