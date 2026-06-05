@@ -87,5 +87,51 @@ class SiamFC(NNTracker):
             return TrackStatus.COASTING
         return TrackStatus.LOST
 
-    def update(self, frame: np.ndarray) -> TrackResult:  # pragma: no cover
-        raise NotImplementedError("update() is implemented in Task 7")
+    def update(self, frame: np.ndarray) -> TrackResult:
+        assert self._template is not None and self._box is not None, "init() first"
+        h_img, w_img = frame.shape[0], frame.shape[1]
+        pix = self._box.to_pixels(w_img, h_img)
+        cx, cy = pix.center
+        s_z = self._exemplar_side(pix)
+        s_x = s_z * self._search_size / self._exemplar_size
+        spec_x = self._model.io_spec.inputs[1]
+        z = self._template.arrays["exemplar"]
+
+        centre = self._scale_num // 2
+        scales = self._scale_step ** (np.arange(self._scale_num) - centre)
+        best = None  # (idx, factor, up_norm, peak, raw_map)
+        for i, f in enumerate(scales):
+            side = s_x * f
+            patch, _ = crop_with_context(frame, (cx, cy), (side, side),
+                                         (self._search_size, self._search_size))
+            x = to_input(patch, spec_x, color=self._color)
+            raw = self._model.infer({"exemplar": z, "search": x})[self._out_name]
+            smap = np.asarray(raw, np.float32).reshape(self._score_size, self._score_size)
+            up = resize_bilinear(smap[..., None], (self._up_size, self._up_size))[..., 0]
+            penalty = 1.0 if i == centre else self._scale_penalty
+            peak = float(up.max()) * penalty
+            if best is None or peak > best[3]:
+                best = (i, float(f), up, peak, smap)
+
+        idx, factor, up, _peak, smap = best
+        total = up.sum()
+        resp = up / total if total > 0 else up
+        resp = (1.0 - self._window_influence) * resp + self._window_influence * self._hann
+        py, px = np.unravel_index(int(resp.argmax()), resp.shape)
+        disp_x = (px - (self._up_size - 1) / 2.0) * self._total_stride / self._response_up
+        disp_y = (py - (self._up_size - 1) / 2.0) * self._total_stride / self._response_up
+        scale_x = (s_x * factor) / self._search_size
+        new_cx = cx + disp_x * scale_x
+        new_cy = cy + disp_y * scale_x
+
+        scale_factor = (1.0 - self._scale_lr) + self._scale_lr * factor
+        new_w = pix.w * scale_factor
+        new_h = pix.h * scale_factor
+        new_pix = PixelBox(x=new_cx - new_w / 2.0, y=new_cy - new_h / 2.0, w=new_w, h=new_h)
+        self._box = BoundingBox.from_pixels(new_pix, w_img, h_img)
+
+        conf = psr(smap)
+        self._status = self._status_from(conf)
+        self._seq += 1
+        return TrackResult(bbox=self._box, confidence=float(conf), status=self._status,
+                           timestamp=time.monotonic(), seq=self._seq)

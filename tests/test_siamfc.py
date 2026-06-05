@@ -33,3 +33,47 @@ def test_init_builds_127_exemplar_template():
     z = t.get_template().arrays["exemplar"]
     assert z.shape == (1, 1, 127, 127)
     assert t.status == TrackStatus.LOCKED
+
+
+def test_centred_peak_keeps_centre():
+    # all 3 scales return a centred peak -> no displacement, box centre unchanged
+    maps = [{"score_map": score_map_peaked(SS, 8, 8)} for _ in range(3)]
+    t = _siam(maps, window_influence=0.0)
+    t.init(_frame(), _box())
+    res = t.update(_frame())
+    cx, cy = res.bbox.to_pixels(320, 240).center
+    assert cx == pytest.approx(160.0, abs=2.0)
+    assert cy == pytest.approx(120.0, abs=2.0)
+    assert res.seq == 1
+
+
+def test_offcentre_peak_moves_box_in_that_direction():
+    # peak one cell to the +x of centre on every scale -> centre moves +x
+    maps = [{"score_map": score_map_peaked(SS, 8, 9)} for _ in range(3)]
+    t = _siam(maps, window_influence=0.0)
+    t.init(_frame(), _box())
+    res = t.update(_frame())
+    cx, _ = res.bbox.to_pixels(320, 240).center
+    assert cx > 161.0   # moved right
+
+
+def test_winning_larger_scale_grows_box():
+    # scales are searched ascending: [<1, 1, >1]; make the >1 scale (3rd call) win
+    maps = [
+        {"score_map": score_map_peaked(SS, 8, 8, peak=0.2)},
+        {"score_map": score_map_peaked(SS, 8, 8, peak=0.2)},
+        {"score_map": score_map_peaked(SS, 8, 8, peak=1.0)},
+    ]
+    t = _siam(maps, window_influence=0.0)
+    t.init(_frame(), _box())
+    w0 = t.get_template().bbox.w
+    res = t.update(_frame())
+    assert res.bbox.w > w0   # box grew toward the winning larger scale
+
+
+def test_low_response_reports_lost():
+    maps = [{"score_map": np.zeros((1, 1, SS, SS), np.float32)} for _ in range(3)]
+    t = _siam(maps)
+    t.init(_frame(), _box())
+    res = t.update(_frame())
+    assert res.status == TrackStatus.LOST
