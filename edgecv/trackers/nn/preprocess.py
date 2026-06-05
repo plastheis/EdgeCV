@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from edgecv.backends.base import TensorSpec
+
 
 def _sample_clamped(img: np.ndarray, gx: np.ndarray, gy: np.ndarray) -> np.ndarray:
     """Bilinear sample at float (gx, gy) frame coords; clamp = edge-replicate."""
@@ -110,3 +112,53 @@ def crop_with_context(
     if frame.ndim == 2:
         patch = patch.reshape(oh, ow)
     return patch, CropXform(center, (sh, sw), (oh, ow))
+
+
+def _to_gray(img: np.ndarray) -> np.ndarray:
+    if img.ndim == 2:
+        return img[..., None]
+    if img.shape[2] == 1:
+        return img
+    w = np.array([0.299, 0.587, 0.114], np.float32)
+    return (img[..., :3] * w).sum(axis=2, keepdims=True)
+
+
+def to_input(patch: np.ndarray, spec: TensorSpec, *, color: str = "rgb",
+             scale: float = 1.0 / 255.0, mean=None, std=None) -> np.ndarray:
+    """Colour-convert, normalise, pack to NCHW, cast to spec.dtype (quantise if INT8)."""
+    img = patch.astype(np.float32)
+    if color == "gray":
+        img = _to_gray(img)
+    elif img.ndim == 2:
+        img = img[..., None]
+    img = img * scale
+    if mean is not None:
+        img = (img - np.asarray(mean, np.float32)) / np.asarray(std, np.float32)
+    chw = np.transpose(img, (2, 0, 1))[None]          # 1,C,H,W
+    if spec.quant:
+        q = np.round(chw / spec.quant["scale"]) + spec.quant["zero_point"]
+        info = np.iinfo(np.dtype(spec.dtype))
+        return np.clip(q, info.min, info.max).astype(spec.dtype)
+    return chw.astype(np.dtype(spec.dtype))
+
+
+def class_agnostic_nms(boxes_xyxy: np.ndarray, scores: np.ndarray,
+                       iou_thresh: float) -> np.ndarray:
+    """Greedy NMS over a single pool (class labels ignored). Returns kept indices."""
+    if len(scores) == 0:
+        return np.empty((0,), np.int64)
+    x1, y1, x2, y2 = boxes_xyxy[:, 0], boxes_xyxy[:, 1], boxes_xyxy[:, 2], boxes_xyxy[:, 3]
+    areas = np.maximum(0.0, x2 - x1) * np.maximum(0.0, y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(int(i))
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
+        order = order[1:][iou <= iou_thresh]
+    return np.array(keep, np.int64)

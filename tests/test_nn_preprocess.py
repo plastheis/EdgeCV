@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from edgecv.trackers.nn.preprocess import crop_with_context, letterbox, resize_bilinear
+from edgecv.trackers.nn.preprocess import class_agnostic_nms, crop_with_context, letterbox, resize_bilinear, to_input
+from edgecv.backends.base import TensorSpec
 
 
 def test_resize_bilinear_identity():
@@ -58,3 +59,29 @@ def test_letterbox_inverts_box():
     s = xf.scale
     x1, y1, x2, y2 = xf.to_orig_xyxy((px, py, px + 100 * s, py + 50 * s))
     assert (x1, y1, x2, y2) == pytest.approx((0.0, 0.0, 100.0, 50.0), abs=1e-4)
+
+
+def test_to_input_gray_layout_and_scale():
+    patch = np.full((8, 8, 3), 255, np.uint8)
+    spec = TensorSpec(name="exemplar", shape=(1, 1, 8, 8), dtype="float32")
+    arr = to_input(patch, spec, color="gray", scale=1 / 255)
+    assert arr.shape == (1, 1, 8, 8)
+    assert arr.dtype == np.float32
+    np.testing.assert_allclose(arr, 1.0, atol=1e-4)
+
+
+def test_to_input_int8_quant():
+    patch = np.zeros((4, 4, 3), np.uint8)
+    spec = TensorSpec(name="x", shape=(1, 3, 4, 4), dtype="int8",
+                      quant={"scale": 0.5, "zero_point": -3})
+    arr = to_input(patch, spec, color="rgb", scale=1 / 255)
+    assert arr.dtype == np.int8
+    # value 0.0 -> round(0/0.5) + (-3) = -3
+    assert int(arr.flat[0]) == -3
+
+
+def test_class_agnostic_nms_suppresses_overlap():
+    boxes = np.array([[0, 0, 10, 10], [1, 1, 11, 11], [50, 50, 60, 60]], np.float32)
+    scores = np.array([0.9, 0.8, 0.7], np.float32)
+    keep = class_agnostic_nms(boxes, scores, iou_thresh=0.5)
+    assert set(keep.tolist()) == {0, 2}  # box 1 overlaps the higher-scored box 0
