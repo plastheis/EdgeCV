@@ -17,12 +17,13 @@ class ScriptedModel(Model):
         self._io_spec = io_spec
         self._outputs = outputs
         self.calls = 0
+        self.closed = False
 
     @property
     def io_spec(self) -> IOSpec:
         return self._io_spec
 
-    def infer(self, inputs):
+    def infer(self, inputs: dict[str, np.ndarray]):
         out = self._outputs[self.calls % len(self._outputs)]
         self.calls += 1
         return out

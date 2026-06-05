@@ -37,7 +37,11 @@ def _select_backend(backend: str) -> str:
     )
 
 
-def resolve_model(manifest, backend: str, model: Model | None) -> Model:
+def resolve_model(
+    manifest: ModelManifest | str | Path | None,
+    backend: str,
+    model: Model | None,
+) -> Model:
     """DI seam: explicit model wins; else resolve a backend and load the manifest."""
     if model is not None:
         return model
@@ -50,7 +54,7 @@ def resolve_model(manifest, backend: str, model: Model | None) -> Model:
 class NNTracker(Tracker):
     def __init__(self, manifest: ModelManifest | str | Path | None = None, *,
                  backend: str = "auto", model: Model | None = None) -> None:
-        self._model: Model | None = resolve_model(manifest, backend, model)
+        self._model: Model = resolve_model(manifest, backend, model)
         self._status: TrackStatus = TrackStatus.INITIALIZING
         self._seq: int = 0
         self._closed: bool = False
