@@ -1,0 +1,23 @@
+name: siamfc_generic
+task: sot_template_matching
+preprocessing:
+  color: gray
+  exemplar: 127
+  search: 255
+  context: 0.5
+  total_stride: 8
+  response_up: 16
+  scale_num: 3
+  scale_step: 1.0375
+  scale_penalty: 0.9745
+  scale_lr: 0.59
+  window_influence: 0.176
+io:
+  inputs:
+    - { name: exemplar, shape: [1, 1, 127, 127], dtype: float32 }
+    - { name: search,   shape: [1, 1, 255, 255], dtype: float32 }
+  outputs:
+    - { name: score_map, shape: [1, 1, 17, 17], dtype: float32 }
+artifacts:
+  onnx: { path: siamfc_generic.onnx }
+  rknn: { path: siamfc_generic.rk3588.rknn, quant: int8 }
