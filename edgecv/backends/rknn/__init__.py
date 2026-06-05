@@ -56,7 +56,10 @@ class RknnModel(Model):
     def infer(self, inputs: dict) -> dict:
         ordered = [inputs[s.name] for s in self._io_spec.inputs]
         results = self._rknn.inference(inputs=ordered)
-        return dict(zip(self._output_order, results, strict=False))
+        # RKNNLite returns outputs positionally; manifest.outputs must match the
+        # compiled model's output order exactly (RKNNLite has no output-name API).
+        # strict=True surfaces a count mismatch loudly instead of truncating.
+        return dict(zip(self._output_order, results, strict=True))
 
     def close(self) -> None:
         if self._rknn is not None:
@@ -87,7 +90,7 @@ class RknnBackend(InferenceBackend):
             raise RuntimeError(f"failed to load rknn model {artifact['path']!r}")
         core_mask = artifact.get("npu_core") or 0
         if rknn.init_runtime(core_mask=core_mask) != 0:
-            raise RuntimeError("rknn init_runtime failed")
+            raise RuntimeError(f"rknn init_runtime failed for {artifact['path']!r}")
         io_spec = IOSpec(
             inputs=_specs(manifest.inputs),
             outputs=_specs(manifest.outputs),
