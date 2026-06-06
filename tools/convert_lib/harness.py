@@ -23,10 +23,14 @@ def export_and_validate(module: Any, example_inputs: Sequence[Any],
     import torch
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    # dynamo=False forces the legacy TorchScript exporter: it emits a standard Conv with
+    # the exemplar embedding as a graph input (what the runtime + parity check expect) and
+    # needs no onnxscript. The torch>=2.9 default (dynamo=True) traces via torch.export,
+    # which decomposes the dynamic-weight xcorr differently and pulls onnxscript.
     torch.onnx.export(
         module, tuple(example_inputs), out_path,
         input_names=list(in_names), output_names=list(out_names),
-        opset_version=opset, dynamic_axes=dynamic_axes, do_constant_folding=True)
+        opset_version=opset, dynamic_axes=dynamic_axes, dynamo=False)
     onnx.checker.check_model(out_path)
 
     rng = np.random.default_rng(0)
