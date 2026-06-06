@@ -32,7 +32,7 @@ def test_close_is_idempotent_and_closes_model():
 
 
 def test_mock_backend_resolves_via_manifest():
-    trk = NNTracker("edgecv/models/manifests/yolo_generic.yaml", backend="mock")
+    trk = NNTracker("edgecv/models/manifests/yolo26n.yaml", backend="mock")
     assert trk._model is not None
     trk.close()
 
@@ -41,7 +41,7 @@ def test_auto_with_no_real_backend_raises_never_mock(monkeypatch):
     import edgecv.trackers.nn.base as base
     monkeypatch.setattr(base, "available_backends", lambda: ["mock"])
     with pytest.raises(RuntimeError, match="no inference backend"):
-        NNTracker("edgecv/models/manifests/yolo_generic.yaml", backend="auto")
+        NNTracker("edgecv/models/manifests/yolo26n.yaml", backend="auto")
 
 
 def test_rknn_unavailable_off_device_is_clean():

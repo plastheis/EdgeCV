@@ -18,5 +18,5 @@ def test_manifest_preprocessing_none_is_empty():
 
 
 def test_manifest_preprocessing_reads_yaml():
-    pp = manifest_preprocessing("edgecv/models/manifests/yolo_generic.yaml")
-    assert pp["output_format"] == "yolov5"
+    pp = manifest_preprocessing("edgecv/models/manifests/yolo26n.yaml")
+    assert pp["output_format"] == "yolov8"
