@@ -35,6 +35,12 @@ python tools/convert.py --model yolo26n --checkpoint models/yolo26n.pt
 
 # ...and chain to an RK3588 INT8 RKNN (needs rknn-toolkit2 + calibration images)
 python tools/convert.py --model yolo26n --checkpoint models/yolo26n.pt --rknn --calib calib/
+
+# NanoTrack V3: PyTorch checkpoint -> ONNX (writes models/nanotrack.onnx)
+python tools/convert.py --model nanotrack --checkpoint models/nanotrackv3.pth
+
+# ...and chain to an RK3588 INT8 RKNN (needs rknn-toolkit2 + calibration images)
+python tools/convert.py --model nanotrack --checkpoint models/nanotrackv3.pth --rknn --calib calib/
 ```
 
 ## How it works
@@ -98,6 +104,14 @@ applies `scale=1/255` on the host, and `rknn_convert` configures `mean=0, std=1`
 (raw-pixel passthrough). If on-device validation shows a mismatch, set the RKNN
 `std_values` to `255` (let the NPU divide) **or** feed raw pixels and drop the host
 scale — keep it consistent with `to_input`.
+
+**NanoTrack RKNN/parity caveat (untested in CI):** the DepthwiseBAN head uses a
+**data-dependent conv kernel** (`xcorr_depthwise`: the exemplar feature is the conv
+weight) and a **matmul** (`xcorr_pixelwise`). Both export to ONNX and pass torch-vs-
+onnxruntime parity (legacy exporter, `dynamo=False`), but RKNN operator support for a
+dynamic-weight grouped conv is untested on-device. Validate manually; if unsupported,
+fall back to a fixed-template (two-graph) export. `to_input` feeds raw `[0,255]`
+(`scale=1.0`), so configure `rknn_convert` with `mean=0, std=1` to match.
 
 ## Notes
 

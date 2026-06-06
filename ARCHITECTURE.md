@@ -275,6 +275,10 @@ abstraction so they can be template-conditioned. Preprocessing (crop/resize/colo
 candidate for hardware acceleration (e.g. RK RGA) behind the backend boundary; start with numpy and
 swap in fast paths later without changing the tracker.
 
+NanoTrack (V3) is the lightweight anchor-free member: MobileNetV3-small-v3 backbone +
+DepthwiseBAN head emitting `cls`/`loc` maps, decoded over a point grid — same
+manifest-driven, HAL-only contract as SiamFC.
+
 ### 6.3 Hybrid trackers (`edgecv/trackers/hybrid/`)
 
 A hybrid composes a CF tracker + a detector (and, later, a motion cue) across processes. It owns a
@@ -575,7 +579,7 @@ edgecv/
 │   │   ├── mosse.py csk.py kcf.py dsst.py staple.py ...
 │   │   └── ops/           # fft, features (raw/hog/colornames), windows, psr
 │   ├── nn/
-│   │   └── siamfc.py siamrpn.py ...     # backend-backed, manifest-driven, template-conditioned
+│   │   └── siamfc.py siamrpn.py nanotrack.py ...     # backend-backed, manifest-driven, template-conditioned
 │   └── hybrid/            # fusion trackers (e.g. MAFiD-style) — own process groups; own specs
 ├── backends/
 │   ├── base.py            # InferenceBackend, Model, IOSpec ABCs
