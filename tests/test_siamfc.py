@@ -3,6 +3,7 @@ import pytest
 
 from edgecv.core.bbox import BoundingBox
 from edgecv.core.result import TrackStatus
+from edgecv.models.manifest import ModelManifest
 from edgecv.trackers.nn.siamfc import SiamFC
 from tests._nn_stubs import ScriptedModel, score_map_peaked, siam_io
 
@@ -84,3 +85,19 @@ def test_nn_package_exports():
     assert hasattr(nn, "SiamFC")
     assert hasattr(nn, "YoloTracker")
     assert hasattr(nn, "YoloDetector")
+
+
+def test_manifest_preprocessing_reaches_siamfc():
+    mf = ModelManifest(name="t", task="sot_template_matching",
+                       preprocessing={"window_influence": 0.99, "context": 0.7})
+    t = SiamFC(mf, model=ScriptedModel(siam_io(SS), [{"score_map": score_map_peaked(SS, 8, 8)}]))
+    assert t._window_influence == 0.99
+    assert t._context == 0.7
+
+
+def test_siamfc_explicit_kwarg_overrides_manifest():
+    mf = ModelManifest(name="t", task="sot_template_matching",
+                       preprocessing={"window_influence": 0.99})
+    t = SiamFC(mf, model=ScriptedModel(siam_io(SS), [{"score_map": score_map_peaked(SS, 8, 8)}]),
+               window_influence=0.1)
+    assert t._window_influence == 0.1

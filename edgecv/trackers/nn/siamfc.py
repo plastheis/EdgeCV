@@ -25,23 +25,25 @@ def _hann2d(n: int) -> np.ndarray:
 
 class SiamFC(NNTracker):
     def __init__(self, manifest=None, *, backend="auto", model=None,
-                 exemplar_size=127, search_size=255, context=0.5,
-                 total_stride=8, response_up=16, scale_num=3, scale_step=1.0375,
-                 scale_penalty=0.9745, scale_lr=0.59, window_influence=0.176,
-                 color=UNSET, scale=UNSET, score_lock=8.0, score_lost=4.0) -> None:
+                 exemplar_size=UNSET, search_size=UNSET, context=UNSET,
+                 total_stride=UNSET, response_up=UNSET, scale_num=UNSET,
+                 scale_step=UNSET, scale_penalty=UNSET, scale_lr=UNSET,
+                 window_influence=UNSET, color=UNSET, scale=UNSET,
+                 score_lock=8.0, score_lost=4.0) -> None:
         super().__init__(manifest, backend=backend, model=model)
-        self._exemplar_size = exemplar_size
-        self._search_size = search_size
-        self._context = context
-        self._total_stride = total_stride
-        self._response_up = response_up
-        self._scale_num = scale_num
-        self._scale_step = scale_step
-        self._scale_penalty = scale_penalty
-        self._scale_lr = scale_lr
-        self._window_influence = window_influence
-        self._color = resolve_pp(color, self._preprocessing, "color", "rgb")
-        self._scale = resolve_pp(scale, self._preprocessing, "scale", 1.0)
+        pp = self._preprocessing
+        self._exemplar_size = resolve_pp(exemplar_size, pp, "exemplar", 127)
+        self._search_size = resolve_pp(search_size, pp, "search", 255)
+        self._context = resolve_pp(context, pp, "context", 0.5)
+        self._total_stride = resolve_pp(total_stride, pp, "total_stride", 8)
+        self._response_up = resolve_pp(response_up, pp, "response_up", 16)
+        self._scale_num = resolve_pp(scale_num, pp, "scale_num", 3)
+        self._scale_step = resolve_pp(scale_step, pp, "scale_step", 1.0375)
+        self._scale_penalty = resolve_pp(scale_penalty, pp, "scale_penalty", 0.9745)
+        self._scale_lr = resolve_pp(scale_lr, pp, "scale_lr", 0.59)
+        self._window_influence = resolve_pp(window_influence, pp, "window_influence", 0.176)
+        self._color = resolve_pp(color, pp, "color", "rgb")
+        self._scale = resolve_pp(scale, pp, "scale", 1.0)
         self._score_lock = score_lock
         self._score_lost = score_lost
         out = self._model.io_spec.outputs[0]
