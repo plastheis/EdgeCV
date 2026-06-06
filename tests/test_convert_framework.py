@@ -1,8 +1,7 @@
 from pathlib import Path
 
-import pytest
-
 import convert_lib
+import pytest
 from convert_lib import registry, run
 from convert_lib.registry import Adapter
 

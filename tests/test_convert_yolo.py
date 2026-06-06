@@ -1,9 +1,7 @@
 import sys
 import types
-from pathlib import Path
 
 import pytest
-
 from convert_lib import registry
 
 
@@ -16,7 +14,7 @@ def test_yolo_adapters_registered_with_export_hook():
 
 
 def test_export_invokes_ultralytics_one_to_many(tmp_path, monkeypatch):
-    pytest.importorskip("torch")   # convert_lib.adapters.yolo import pulls the package (siamfc/torch)
+    pytest.importorskip("torch")   # convert_lib.adapters.yolo pulls the package (siamfc/torch)
     from edgecv.models.manifest import load_manifest
 
     produced = tmp_path / "src" / "yolo26n.onnx"

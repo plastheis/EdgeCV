@@ -12,7 +12,7 @@ from typing import Any
 class Adapter:
     name: str                                       # manifest model name, e.g. "siamfc_generic"
     build: Callable[[str], Any] | None = None       # torch path: checkpoint -> .eval() nn.Module
-    export: Callable[..., str] | None = None         # upstream-exporter path: (ckpt, onnx_out, manifest) -> onnx_out
+    export: Callable[..., str] | None = None        # upstream-exporter path (e.g. ultralytics yolo)
     dynamic_axes: dict | None = None                # optional; variable dims (e.g. YOLO det count)
 
 

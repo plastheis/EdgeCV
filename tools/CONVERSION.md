@@ -30,9 +30,11 @@ python tools/convert.py --model siamfc_generic --checkpoint models/siamfc_alexne
 python tools/convert.py --model siamfc_generic --checkpoint models/siamfc_alexnet_e50.pth \
     --rknn --calib calib/
 
-# convert an ONNX produced elsewhere (e.g. ultralytics) straight to RKNN
-python tools/onnx_to_rknn.py --onnx models/yolo.onnx --out models/yolo.rk3588.rknn \
-    --target rk3588 --calibration-dir calib/ --inputs images
+# YOLO26n: Ultralytics checkpoint -> one-to-many ONNX (writes models/yolo26n.onnx)
+python tools/convert.py --model yolo26n --checkpoint models/yolo26n.pt
+
+# ...and chain to an RK3588 INT8 RKNN (needs rknn-toolkit2 + calibration images)
+python tools/convert.py --model yolo26n --checkpoint models/yolo26n.pt --rknn --calib calib/
 ```
 
 ## How it works
@@ -84,18 +86,18 @@ for SiamFC, etc.) lives in the manifest and is consumed by the tracker, not the 
 
 ### Variant: upstream already exports ONNX (e.g. YOLO / ultralytics)
 
-Some model families ship their own exporter, so you don't need a torch `nn.Module` adapter
-at all — export the ONNX with the upstream tool, then convert straight to RKNN:
+Some model families ship their own exporter, so there is no torch `nn.Module` to own.
+These register an `export` hook instead of `build` (see `adapters/yolo.py`); the
+dispatcher calls it to write the ONNX directly, runs `onnx.checker`, and skips the
+torch parity harness. YOLO26 uses the **one-to-many head** (`nms=False`): the NMS-free
+end-to-end head is unavailable on RKNN, and both backends must emit the same
+`(1, 4+nc, N)` tensor for the `yolov8` decoder.
 
-```bash
-yolo export model=yolo.pt format=onnx        # ultralytics writes yolo.onnx
-python tools/onnx_to_rknn.py --onnx yolo.onnx --out models/yolo_generic.rk3588.rknn \
-    --target rk3588 --calibration-dir calib/ --inputs images
-```
-
-(Folding this behind `tools/convert.py` — an adapter that shells out to the upstream
-exporter in place of `build()` and skips the torch export — is a possible future addition,
-not implemented yet.)
+**Device-path numerics caveat (RKNN, untested in CI):** the tracker's `to_input`
+applies `scale=1/255` on the host, and `rknn_convert` configures `mean=0, std=1`
+(raw-pixel passthrough). If on-device validation shows a mismatch, set the RKNN
+`std_values` to `255` (let the NPU divide) **or** feed raw pixels and drop the host
+scale — keep it consistent with `to_input`.
 
 ## Notes
 
