@@ -106,3 +106,43 @@ def test_nn_package_exports():
     assert hasattr(nn, "SiamFC")
     assert hasattr(nn, "YoloTracker")
     assert hasattr(nn, "YoloDetector")
+
+
+def _yolo_io_v8(nc=80):
+    # one-to-many head: (1, 4+nc, N) — transposed vs v5, no objectness column
+    return IOSpec(inputs=(TensorSpec("images", (1, 3, IN, IN), "float32"),),
+                  outputs=(TensorSpec("output0", (1, 4 + nc, -1), "float32"),))
+
+
+def _raw_v8(dets, nc=80):
+    """dets: list of (cx, cy, w, h, cls_score, cls_idx) in INPUT (letterbox) px.
+    Builds a (1, 4+nc, N) tensor (channels-first, the YOLO26 one-to-many layout)."""
+    out = np.zeros((1, 4 + nc, len(dets)), np.float32)
+    for j, (cx, cy, w, h, sc, ci) in enumerate(dets):
+        out[0, :4, j] = [cx, cy, w, h]
+        out[0, 4 + ci, j] = sc
+    return {"output0": out}
+
+
+def _detector_v8(raw, **kw):
+    return YoloDetector(model=ScriptedModel(_yolo_io_v8(), [raw]),
+                        input_size=IN, output_format="yolov8", **kw)
+
+
+def test_yolov8_decode_no_objectness_max_class():
+    # class score 0.9 in column for class 5; score must be 0.9 (no obj multiply)
+    det = _detector_v8(_raw_v8([(32, 32, 16, 16, 0.9, 5)]))
+    out = det.detect(np.zeros((IN, IN, 3), np.uint8))
+    assert out.boxes.shape == (1, 4)
+    assert out.scores[0] == pytest.approx(0.9, abs=1e-3)
+    bx, by, bw, bh = out.boxes[0]
+    assert (bx + bw / 2) == pytest.approx(0.5, abs=0.05)
+
+
+def test_yolov8_thresholds_and_is_pure():
+    det = _detector_v8(_raw_v8([(32, 32, 16, 16, 0.1, 0)]), conf_thresh=0.25)
+    img = np.zeros((IN, IN, 3), np.uint8)
+    assert len(det.detect(img).scores) == 0          # thresholded out
+    det2 = _detector_v8(_raw_v8([(32, 32, 16, 16, 0.8, 2), (10, 10, 8, 8, 0.7, 9)]))
+    o1, o2 = det2.detect(img), det2.detect(img)
+    np.testing.assert_array_equal(o1.boxes, o2.boxes)  # purity

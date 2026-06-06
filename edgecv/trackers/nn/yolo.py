@@ -46,7 +46,9 @@ class YoloDetector:
         lb, xf = letterbox(image, (n, n))
         inp = to_input(lb, self._spec, color=self._color, scale=self._scale)
         raw = np.asarray(self._model.infer({self._spec.name: inp})[self._out_name], np.float32)
-        preds = raw[0]  # (N, 5+nc)
+        # v8/v26 one-to-many head is (1, 4+nc, N) channels-first -> transpose to rows;
+        # v5/"decoded" are already (1, N, k).
+        preds = raw[0].T if self._output_format == "yolov8" else raw[0]
         if preds.shape[0] == 0:
             return DetectorOutput(boxes=np.empty((0, 4), np.float32),
                                   scores=np.empty((0,), np.float32))
@@ -54,6 +56,11 @@ class YoloDetector:
             # yolov5 row layout: [cx, cy, w, h | obj | cls_0..cls_{nc-1}]
             xywh, obj, cls = preds[:, :4], preds[:, 4], preds[:, 5:]
             score = obj * (cls.max(axis=1) if cls.shape[1] > 0 else 1.0)
+        elif self._output_format == "yolov8":
+            # anchor-free, NO objectness: [cx, cy, w, h | cls_0..cls_{nc-1}]
+            xywh, cls = preds[:, :4], preds[:, 4:]
+            score = (cls.max(axis=1) if cls.shape[1] > 0
+                     else np.zeros((preds.shape[0],), np.float32))
         else:  # "decoded": model already emits xywh + score
             xywh, score = preds[:, :4], preds[:, 4]
         keep = score >= self._conf
