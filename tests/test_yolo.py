@@ -4,6 +4,7 @@ import pytest
 from edgecv.backends.base import IOSpec, TensorSpec
 from edgecv.core.bbox import BoundingBox
 from edgecv.core.result import TrackStatus
+from edgecv.models.manifest import ModelManifest
 from edgecv.trackers.nn.yolo import YoloDetector, YoloTracker
 from tests._nn_stubs import ScriptedModel
 
@@ -26,7 +27,8 @@ def _raw(dets, nc=80):
 
 
 def _detector(raw, **kw):
-    return YoloDetector(model=ScriptedModel(_yolo_io(), [raw]), input_size=IN, **kw)
+    return YoloDetector(model=ScriptedModel(_yolo_io(), [raw]), input_size=IN,
+                        output_format="yolov5", **kw)
 
 
 def test_detect_returns_normalised_xywh_and_score():
@@ -59,7 +61,7 @@ FH, FW = 240, 320
 
 def _tracker(maps, **kw):
     m = ScriptedModel(_yolo_io(), maps)
-    return YoloTracker(model=m, input_size=IN, **kw)
+    return YoloTracker(model=m, input_size=IN, output_format="yolov5", **kw)
 
 
 def _box(cx, cy, w=40, h=40):
@@ -146,3 +148,29 @@ def test_yolov8_thresholds_and_is_pure():
     det2 = _detector_v8(_raw_v8([(32, 32, 16, 16, 0.8, 2), (10, 10, 8, 8, 0.7, 9)]))
     o1, o2 = det2.detect(img), det2.detect(img)
     np.testing.assert_array_equal(o1.boxes, o2.boxes)  # purity
+
+
+def _pp_manifest(**pp):
+    return ModelManifest(name="t", task="detection", preprocessing=pp)
+
+
+def test_detector_reads_preprocessing_from_manifest():
+    mf = _pp_manifest(conf_thresh=0.5, input=128, output_format="yolov8", color="gray")
+    det = YoloDetector(manifest=mf, model=ScriptedModel(_yolo_io_v8(), [_raw_v8([])]))
+    assert det._conf == 0.5
+    assert det._input_size == 128
+    assert det._output_format == "yolov8"
+    assert det._color == "gray"
+
+
+def test_detector_explicit_kwarg_overrides_manifest():
+    mf = _pp_manifest(conf_thresh=0.5)
+    det = YoloDetector(manifest=mf, model=ScriptedModel(_yolo_io(), [_raw([])]),
+                       conf_thresh=0.9, output_format="yolov5")
+    assert det._conf == 0.9
+
+
+def test_detector_default_when_absent_from_manifest():
+    det = YoloDetector(model=ScriptedModel(_yolo_io(), [_raw([])]), output_format="yolov5")
+    assert det._conf == 0.25          # hardcoded default
+    assert det._output_format == "yolov5"

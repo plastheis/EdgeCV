@@ -13,7 +13,13 @@ import numpy as np
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackResult, TrackStatus
 from edgecv.fusion.policy import DetectorOutput
-from edgecv.trackers.nn.base import NNTracker, resolve_model
+from edgecv.trackers.nn.base import (
+    UNSET,
+    NNTracker,
+    manifest_preprocessing,
+    resolve_model,
+    resolve_pp,
+)
 from edgecv.trackers.nn.preprocess import (
     class_agnostic_nms,
     crop_with_context,
@@ -27,16 +33,17 @@ class YoloDetector:
     normalised to the image passed to detect()."""
 
     def __init__(self, manifest=None, *, backend="auto", model=None,
-                 input_size=640, color="rgb", scale=1.0 / 255.0,
-                 output_format="yolov5", conf_thresh=0.25, iou_thresh=0.45) -> None:
+                 input_size=UNSET, color=UNSET, scale=UNSET,
+                 output_format=UNSET, conf_thresh=UNSET, iou_thresh=UNSET) -> None:
         self._owns_model = model is None
         self._model = resolve_model(manifest, backend, model)
-        self._input_size = input_size
-        self._color = color
-        self._scale = scale
-        self._output_format = output_format
-        self._conf = conf_thresh
-        self._iou = iou_thresh
+        pp = manifest_preprocessing(manifest)   # {} when a model= is injected
+        self._input_size = resolve_pp(input_size, pp, "input", 640)
+        self._color = resolve_pp(color, pp, "color", "rgb")
+        self._scale = resolve_pp(scale, pp, "scale", 1.0 / 255.0)
+        self._output_format = resolve_pp(output_format, pp, "output_format", "yolov8")
+        self._conf = resolve_pp(conf_thresh, pp, "conf_thresh", 0.25)
+        self._iou = resolve_pp(iou_thresh, pp, "iou_thresh", 0.45)
         self._spec = self._model.io_spec.inputs[0]
         self._out_name = self._model.io_spec.outputs[0].name
 
