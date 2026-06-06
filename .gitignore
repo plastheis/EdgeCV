@@ -10,6 +10,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .claude/
+.pi/
 *.rknn
 
 # model weight blobs (host-only; deferred, not committed)
