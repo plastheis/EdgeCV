@@ -92,3 +92,59 @@ class NanoTrack(NNTracker):
         if value >= self._score_lost:
             return TrackStatus.COASTING
         return TrackStatus.LOST
+
+    def update(self, frame: np.ndarray) -> TrackResult:
+        assert self._template is not None and self._box is not None, "init() first"
+        h_img, w_img = frame.shape[0], frame.shape[1]
+        pix = self._box.to_pixels(w_img, h_img)
+        cx, cy = pix.center
+        s_z = self._exemplar_side(pix)
+        s_x = s_z * self._search_size / self._exemplar_size
+        scale_z = self._exemplar_size / s_z                 # frame px -> search-crop px
+        spec_x = self._model.io_spec.inputs[1]
+        z = self._template.arrays["exemplar"]
+
+        patch, _ = crop_with_context(frame, (cx, cy), (s_x, s_x),
+                                     (self._search_size, self._search_size))
+        x = to_input(patch, spec_x, color=self._color, scale=self._scale)
+        out = self._model.infer({"exemplar": z, "search": x})
+
+        score = _softmax_fg(out[self._cls_name])            # (S*S,)
+        loc = np.asarray(out[self._loc_name], np.float32).reshape(4, -1)  # l,t,r,b
+        px, py = self._points[0], self._points[1]           # search-crop px, centred at 0
+        x1, y1 = px - loc[0], py - loc[1]
+        x2, y2 = px + loc[2], py + loc[3]
+        pred_cx, pred_cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        pred_w, pred_h = (x2 - x1), (y2 - y1)
+
+        def _change(r):
+            return np.maximum(r, 1.0 / r)
+
+        def _sz(w, h):
+            pad = (w + h) * 0.5
+            return np.sqrt((w + pad) * (h + pad))
+
+        tw, th = pix.w * scale_z, pix.h * scale_z           # target size in search-crop px
+        s_c = _change(_sz(pred_w, pred_h) / _sz(tw, th))
+        r_c = _change((tw / th) / (pred_w / pred_h))
+        penalty = np.exp(-(r_c * s_c - 1.0) * self._penalty_k)
+        pscore = penalty * score
+        pscore = (pscore * (1.0 - self._window_influence)
+                  + self._hann * self._window_influence)
+        best = int(pscore.argmax())
+
+        lr = float(penalty[best] * score[best] * self._size_lr)
+        new_cx = cx + float(pred_cx[best]) / scale_z
+        new_cy = cy + float(pred_cy[best]) / scale_z
+        new_w = pix.w * (1.0 - lr) + (float(pred_w[best]) / scale_z) * lr
+        new_h = pix.h * (1.0 - lr) + (float(pred_h[best]) / scale_z) * lr
+
+        new_pix = PixelBox(x=new_cx - new_w / 2.0, y=new_cy - new_h / 2.0,
+                           w=new_w, h=new_h)
+        self._box = BoundingBox.from_pixels(new_pix, w_img, h_img)
+
+        conf = float(score[best])
+        self._status = self._status_from(conf)
+        self._seq += 1
+        return TrackResult(bbox=self._box, confidence=conf, status=self._status,
+                           timestamp=time.monotonic(), seq=self._seq)
