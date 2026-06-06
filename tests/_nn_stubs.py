@@ -43,3 +43,30 @@ def score_map_peaked(score_size: int, cy: int, cx: int, peak: float = 1.0) -> np
     m = np.zeros((1, 1, score_size, score_size), np.float32)
     m[0, 0, cy, cx] = peak
     return m
+
+
+def nano_io(score_size: int = 15) -> IOSpec:
+    return IOSpec(
+        inputs=(TensorSpec("exemplar", (1, 3, 127, 127), "float32"),
+                TensorSpec("search", (1, 3, 255, 255), "float32")),
+        outputs=(TensorSpec("cls", (1, 2, score_size, score_size), "float32"),
+                 TensorSpec("loc", (1, 4, score_size, score_size), "float32")))
+
+
+def cls_peaked(score_size: int, cy: int, cx: int, fg: float = 8.0) -> np.ndarray:
+    """cls logits (1,2,S,S): bg channel 0, fg channel 1 with a high logit at (cy,cx)
+    so softmax fg prob ≈ 1 there and 0.5 elsewhere."""
+    m = np.zeros((1, 2, score_size, score_size), np.float32)
+    m[0, 1, cy, cx] = fg
+    return m
+
+
+def loc_const(score_size: int, left: float, top: float,
+              right: float, bottom: float) -> np.ndarray:
+    """loc (1,4,S,S) with constant l,t,r,b distances at every location."""
+    m = np.zeros((1, 4, score_size, score_size), np.float32)
+    m[0, 0] = left
+    m[0, 1] = top
+    m[0, 2] = right
+    m[0, 3] = bottom
+    return m
