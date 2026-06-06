@@ -10,9 +10,10 @@ from typing import Any
 
 @dataclass
 class Adapter:
-    name: str                              # manifest model name, e.g. "siamfc_generic"
-    build: Callable[[str], Any]            # checkpoint path -> loaded .eval() nn.Module
-    dynamic_axes: dict | None = None       # optional; variable dims (e.g. YOLO det count)
+    name: str                                       # manifest model name, e.g. "siamfc_generic"
+    build: Callable[[str], Any] | None = None       # torch path: checkpoint -> .eval() nn.Module
+    export: Callable[..., str] | None = None         # upstream-exporter path: (ckpt, onnx_out, manifest) -> onnx_out
+    dynamic_axes: dict | None = None                # optional; variable dims (e.g. YOLO det count)
 
 
 _REGISTRY: dict[str, Adapter] = {}

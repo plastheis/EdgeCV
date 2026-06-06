@@ -35,14 +35,13 @@ def _artifact_path(mf, model: str, backend: str) -> str:
 def run(model: str, checkpoint: str, out: str | None = None, *,
         rknn: bool = False, target: str = "rk3588", calib: str | None = None) -> str:
     """Convert `checkpoint` for `model` to ONNX (and optionally RKNN), driven by the
-    model's manifest. Writes ONNX to `out` or to the manifest's resolved artifact path."""
-    import torch
-
+    model's manifest. Writes ONNX to `out` or to the manifest's resolved artifact path.
+    Two paths: a torch adapter (build + parity harness) or an upstream-exporter adapter
+    (adapter.export writes the ONNX directly; we only run onnx.checker)."""
     from edgecv.models.manifest import load_manifest
     from edgecv.models.paths import resolve_artifact_path
 
-    from . import adapters  # noqa: F401  (registers adapters; imports torch)
-    from .harness import export_and_validate
+    from . import adapters  # noqa: F401  (registers adapters)
 
     mf_path = _MANIFESTS / f"{model}.yaml"
     if not mf_path.exists():
@@ -54,18 +53,28 @@ def run(model: str, checkpoint: str, out: str | None = None, *,
         raise SystemExit(
             f"no adapter registered for {model!r}; registered: {registry.registered_names()}"
         ) from None
-    try:
-        module = adapter.build(checkpoint)
-    except (RuntimeError, OSError) as e:   # strict-load mismatch, missing/corrupt file
-        raise SystemExit(f"failed to load checkpoint for {model!r}: {e}") from e
 
     in_names = [i["name"] for i in mf.inputs]
     out_names = [o["name"] for o in mf.outputs]
-    example = tuple(torch.zeros(_concrete(i["shape"])) for i in mf.inputs)
     onnx_out = out or resolve_artifact_path(_artifact_path(mf, model, "onnx"))
-    diff = export_and_validate(module, example, in_names, out_names, onnx_out,
-                               dynamic_axes=adapter.dynamic_axes)
-    print(f"exported {onnx_out}  (parity max|delta|={diff:.2e})")
+
+    if adapter.export is not None:
+        adapter.export(checkpoint, onnx_out, mf)
+        import onnx
+        onnx.checker.check_model(onnx_out)
+        print(f"exported {onnx_out}  (via upstream exporter)")
+    else:
+        import torch
+
+        from .harness import export_and_validate
+        try:
+            module = adapter.build(checkpoint)
+        except (RuntimeError, OSError) as e:   # strict-load mismatch, missing/corrupt file
+            raise SystemExit(f"failed to load checkpoint for {model!r}: {e}") from e
+        example = tuple(torch.zeros(_concrete(i["shape"])) for i in mf.inputs)
+        diff = export_and_validate(module, example, in_names, out_names, onnx_out,
+                                   dynamic_axes=adapter.dynamic_axes)
+        print(f"exported {onnx_out}  (parity max|delta|={diff:.2e})")
 
     if rknn:
         from .rknn import rknn_convert
