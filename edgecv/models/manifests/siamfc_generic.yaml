@@ -4,6 +4,10 @@ task: sot_template_matching
 # [0,255] pixels (no /255, no mean/std), cv2/BGR channel order. The caller feeds
 # BGR frames (e.g. tools/track_webcam.py via cv2); to_input preserves channel order.
 preprocessing:
+  # Only `color` and `scale` flow into SiamFC (manifest-precedence, ARCHITECTURE §10.1).
+  # The hyperparameters below are documentation-only today: SiamFC reads them from its
+  # __init__ defaults, which coincide with these values. Editing them here has no effect
+  # until they are wired through resolve_pp.
   color: rgb
   scale: 1.0
   exemplar: 127

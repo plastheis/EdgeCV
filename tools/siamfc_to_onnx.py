@@ -17,6 +17,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+import onnx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -118,6 +119,7 @@ def convert(checkpoint: str, out: str) -> str:
     net = build_net(sd)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     export_onnx(net, out)
+    onnx.checker.check_model(out)          # structural validation before parity
     diff = _parity_check(net, out)
     print(f"exported {out}  (parity max|delta|={diff:.2e})")
     return out
