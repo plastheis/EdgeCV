@@ -22,8 +22,8 @@ def _nano(outputs, **kw):
     return NanoTrack(model=ScriptedModel(nano_io(S), outputs), **kw)
 
 
-def _out(cy, cx, l=8.0, t=8.0, r=8.0, b=8.0, fg=8.0):
-    return {"cls": cls_peaked(S, cy, cx, fg), "loc": loc_const(S, l, t, r, b)}
+def _out(cy, cx, left=8.0, t=8.0, r=8.0, b=8.0, fg=8.0):
+    return {"cls": cls_peaked(S, cy, cx, fg), "loc": loc_const(S, left, t, r, b)}
 
 
 def test_name_and_instantiation():
@@ -91,7 +91,7 @@ def test_offcentre_peak_moves_box_right():
 
 def test_larger_predicted_box_grows_box():
     # big symmetric distances at the centred peak -> predicted box wider than target.
-    t = _nano([_out(S // 2, S // 2, l=40.0, t=40.0, r=40.0, b=40.0)],
+    t = _nano([_out(S // 2, S // 2, left=40.0, t=40.0, r=40.0, b=40.0)],
               window_influence=0.0)
     t.init(_frame(), _box())
     w0 = t.get_template().bbox.w

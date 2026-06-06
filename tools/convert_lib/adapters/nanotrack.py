@@ -14,7 +14,6 @@ import torch.nn.functional as F
 
 from convert_lib.registry import Adapter, register
 
-
 # ── backbone: mobilenetv3_small_v3 ──────────────────────────────────────────
 
 
@@ -328,9 +327,9 @@ class DepthwiseBAN(nn.Module):
     @staticmethod
     def crop(x):
         if x.size(3) > 4:
-            l = 2
-            r = l + 4
-            x = x[:, :, l:r, l:r]
+            off = 2
+            hi = off + 4
+            x = x[:, :, off:hi, off:hi]
         return x
 
     def forward(self, z_f, x_f):
