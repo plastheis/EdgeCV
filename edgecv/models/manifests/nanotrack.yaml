@@ -1,15 +1,18 @@
 name: nanotrack
 task: sot_template_matching
-# NanoTrack V3 (HonglinChu/SiamTrackers). mobilenetv3_small_v3 + AdjustLayer +
-# DepthwiseBAN anchor-free head. Trained on raw [0,255] crops (no /255, no mean/std);
-# cv2/BGR channel order preserved by to_input. Single graph: re-embeds the exemplar
-# each frame (two-graph template caching deferred). The cls/loc spatial side (S) is
-# read from io_spec at runtime; the 15 below is nominal (configv3 OUTPUT_SIZE).
+# NanoTrack V3 (HonglinChu/SiamTrackers). Split backbone+head architecture:
+# backbone model (255x255 -> 96ch 16x16), head model (z_f 8x8 + x_f 16x16 ->
+# cls, loc). mobilenetv3_small_v3 + depthwise cross-correlation.
+# Trained on raw [0,255] crops (no /255, no mean/std); to_input preserves
+# channel order. Exemplar feature centre-cropped 16->8 before head.
+# exemplar/search are CONCEPTUAL crop-ratio sizes; model_input is the
+# actual backbone input size (both crops resized to this).
 preprocessing:
   color: rgb
   scale: 1.0
   exemplar: 127
   search: 255
+  model_input: 255
   context: 0.5
   stride: 16
   base_size: 7
@@ -24,5 +27,7 @@ io:
     - { name: cls, shape: [1, 2, 15, 15], dtype: float32 }
     - { name: loc, shape: [1, 4, 15, 15], dtype: float32 }
 artifacts:
+  backbone: { path: nanotrack_backbone.onnx }
+  head: { path: nanotrack_head.onnx }
   onnx: { path: nanotrack.onnx }
   rknn: { path: nanotrack.rk3588.rknn, quant: int8 }

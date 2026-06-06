@@ -1,6 +1,8 @@
-"""NanoTrack V3 tracker (ARCHITECTURE.md §6.2). Single two-input graph
-(exemplar, search) -> (cls, loc); MobileNetV3-small-v3 + AdjustLayer + DepthwiseBAN
-anchor-free head. Reference defaults: HonglinChu/SiamTrackers NanoTrack configv3."""
+"""NanoTrack V3 tracker (ARCHITECTURE.md §6.2). Split backbone+head architecture:
+backbone model (255x255 -> 96ch 16x16 features) called twice (exemplar + search),
+exemplar feature centre-cropped to 8x8, then head model (z_f, x_f) -> (cls, loc).
+MobileNetV3-small-v3 + AdjustLayer + DepthwiseBAN anchor-free head.
+Reference defaults: HonglinChu/SiamTrackers NanoTrack configv3."""
 
 from __future__ import annotations
 
@@ -30,14 +32,19 @@ def _softmax_fg(cls: np.ndarray) -> np.ndarray:
 
 class NanoTrack(NNTracker):
     def __init__(self, manifest=None, *, backend="auto", model=None,
+                 backbone=None, head=None,
                  exemplar_size=UNSET, search_size=UNSET, context=UNSET,
                  stride=UNSET, base_size=UNSET, penalty_k=UNSET,
                  window_influence=UNSET, size_lr=UNSET, color=UNSET, scale=UNSET,
+                 model_input=UNSET,
                  score_lock=0.6, score_lost=0.35) -> None:
-        super().__init__(manifest, backend=backend, model=model)
+        super().__init__(manifest, backend=backend, model=model or backbone)
         pp = self._preprocessing
+        # exemplar_size / search_size are CONCEPTUAL for crop ratio; model_input
+        # is the actual backbone input size (both crops resized to this).
         self._exemplar_size = resolve_pp(exemplar_size, pp, "exemplar", 127)
         self._search_size = resolve_pp(search_size, pp, "search", 255)
+        self._model_input = resolve_pp(model_input, pp, "model_input", 255)
         self._context = resolve_pp(context, pp, "context", 0.5)
         self._stride = resolve_pp(stride, pp, "stride", 16)
         self._base_size = resolve_pp(base_size, pp, "base_size", 7)
@@ -48,10 +55,22 @@ class NanoTrack(NNTracker):
         self._scale = resolve_pp(scale, pp, "scale", 1.0)
         self._score_lock = score_lock
         self._score_lost = score_lost
-        names = [o.name for o in self._model.io_spec.outputs]
+
+        # Two-model injection seam: explicit arg wins, else use the resolved
+        # single model (backward compat), else load from manifest.
+        self._backbone = backbone
+        self._head = head
+        if self._backbone is None and self._head is None:
+            # Single-model (legacy) or manifest-loaded path
+            self._head = self._model
+            self._backbone = self._model  # same model for both
+
+        # Read head output spec for cls/loc names and score size.
+        head_out = self._head.io_spec.outputs
+        names = [o.name for o in head_out]
         self._cls_name = "cls" if "cls" in names else names[0]
         self._loc_name = "loc" if "loc" in names else names[1]
-        self._score_size = self._model.io_spec.outputs[0].shape[-1]
+        self._score_size = head_out[0].shape[-1]
         self._points = points_grid(self._stride, self._score_size)   # (2, S*S)
         self._hann = _hann2d(self._score_size)
         self._template: Template | None = None
@@ -77,11 +96,21 @@ class NanoTrack(NNTracker):
         h_img, w_img = frame.shape[0], frame.shape[1]
         pix = bbox.to_pixels(w_img, h_img)
         s_z = self._exemplar_side(pix)
+
+        # Crop exemplar region, resize to model_input, feed through backbone,
+        # then centre-crop the 16x16 feature to 8x8 for the head.
         patch, _ = crop_with_context(frame, pix.center, (s_z, s_z),
-                                     (self._exemplar_size, self._exemplar_size))
-        spec_z = self._model.io_spec.inputs[0]
-        z = to_input(patch, spec_z, color=self._color, scale=self._scale)
-        self._template = Template(arrays={"exemplar": z}, bbox=bbox, meta={"s_z": s_z})
+                                     (self._model_input, self._model_input))
+        xf = to_input(patch, self._backbone.io_spec.inputs[0],
+                      color=self._color, scale=self._scale)
+        z_feat = np.asarray(
+            self._backbone.infer({self._backbone.io_spec.inputs[0].name: xf})[
+                self._backbone.io_spec.outputs[0].name
+            ], np.float32,
+        )  # (1, 96, 16, 16)
+        z_f = z_feat[:, :, 4:12, 4:12]  # centre-crop 16->8
+
+        self._template = Template(arrays={"exemplar": z_f}, bbox=bbox, meta={"s_z": s_z})
         self._box = bbox
         self._status = TrackStatus.LOCKED
         self._seq = 0
@@ -100,14 +129,27 @@ class NanoTrack(NNTracker):
         cx, cy = pix.center
         s_z = self._exemplar_side(pix)
         s_x = s_z * self._search_size / self._exemplar_size
-        scale_z = self._exemplar_size / s_z                 # frame px -> search-crop px
-        spec_x = self._model.io_spec.inputs[1]
-        z = self._template.arrays["exemplar"]
+        # scale_z converts search-crop px to frame px.
+        # With both crops at model_input: scale_z = model_input/s_x = exemplar/s_z
+        # because s_x = s_z * search/exemplar.
+        scale_z = self._exemplar_size / s_z
+        z_f = self._template.arrays["exemplar"]  # (1, 96, 8, 8)
 
+        # Crop search region, resize to model_input, feed through backbone.
         patch, _ = crop_with_context(frame, (cx, cy), (s_x, s_x),
-                                     (self._search_size, self._search_size))
-        x = to_input(patch, spec_x, color=self._color, scale=self._scale)
-        out = self._model.infer({"exemplar": z, "search": x})
+                                     (self._model_input, self._model_input))
+        xf = to_input(patch, self._backbone.io_spec.inputs[0],
+                      color=self._color, scale=self._scale)
+        x_feat = np.asarray(
+            self._backbone.infer({self._backbone.io_spec.inputs[0].name: xf})[
+                self._backbone.io_spec.outputs[0].name
+            ], np.float32,
+        )  # (1, 96, 16, 16)
+
+        # Head: z_f (8x8), x_feat (16x16) -> cls, loc.
+        head_in = {self._head.io_spec.inputs[0].name: z_f,
+                   self._head.io_spec.inputs[1].name: x_feat}
+        out = self._head.infer(head_in)
 
         score = _softmax_fg(out[self._cls_name])            # (S*S,)
         loc = np.asarray(out[self._loc_name], np.float32).reshape(4, -1)  # l,t,r,b
@@ -148,3 +190,12 @@ class NanoTrack(NNTracker):
         self._seq += 1
         return TrackResult(bbox=self._box, confidence=conf, status=self._status,
                            timestamp=time.monotonic(), seq=self._seq)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self._backbone is not self._head and self._backbone is not None:
+            self._backbone.close()
+        if self._head is not None and self._head is not self._model:
+            self._head.close()
+        super().close()

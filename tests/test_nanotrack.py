@@ -5,7 +5,14 @@ from edgecv.core.bbox import BoundingBox
 from edgecv.core.result import TrackStatus
 from edgecv.models.manifest import ModelManifest
 from edgecv.trackers.nn.nanotrack import NanoTrack
-from tests._nn_stubs import ScriptedModel, cls_peaked, loc_const, nano_io
+from tests._nn_stubs import (
+    ScriptedModel,
+    loc_const,
+    nano_backbone_io,
+    nano_head_io,
+    nano_head_out,
+    nano_z_feat,
+)
 
 S = 15  # score size
 
@@ -18,12 +25,17 @@ def _box():
     return BoundingBox(x=(160 - 20) / 320, y=(120 - 20) / 240, w=40 / 320, h=40 / 240)
 
 
-def _nano(outputs, **kw):
-    return NanoTrack(model=ScriptedModel(nano_io(S), outputs), **kw)
+def _nano(head_outputs, backbone_outputs=None, **kw):
+    """Create NanoTrack with split backbone + head stub models."""
+    if backbone_outputs is None:
+        backbone_outputs = [{"output": nano_z_feat()}]
+    bb = ScriptedModel(nano_backbone_io(), backbone_outputs)
+    hd = ScriptedModel(nano_head_io(S), head_outputs)
+    return NanoTrack(backbone=bb, head=hd, **kw)
 
 
 def _out(cy, cx, left=8.0, t=8.0, r=8.0, b=8.0, fg=8.0):
-    return {"cls": cls_peaked(S, cy, cx, fg), "loc": loc_const(S, left, t, r, b)}
+    return nano_head_out(S, cy, cx, left=left, top=t, right=r, bottom=b, fg=fg)
 
 
 def test_name_and_instantiation():
@@ -31,11 +43,12 @@ def test_name_and_instantiation():
     assert t.name() == "NanoTrack"
 
 
-def test_init_builds_127_exemplar_template():
+def test_init_builds_exemplar_feature_template():
     t = _nano([_out(S // 2, S // 2)])
     t.init(_frame(), _box())
     z = t.get_template().arrays["exemplar"]
-    assert z.shape == (1, 3, 127, 127)
+    # z_f is centre-cropped backbone output: (1, 96, 8, 8)
+    assert z.shape == (1, 96, 8, 8)
     assert t.status == TrackStatus.LOCKED
 
 
@@ -51,7 +64,9 @@ def test_set_template_round_trips():
 def test_manifest_preprocessing_reaches_nanotrack():
     mf = ModelManifest(name="t", task="sot_template_matching",
                        preprocessing={"window_influence": 0.99, "context": 0.7})
-    t = NanoTrack(mf, model=ScriptedModel(nano_io(S), [_out(S // 2, S // 2)]))
+    bb = ScriptedModel(nano_backbone_io(), [{"output": nano_z_feat()}])
+    hd = ScriptedModel(nano_head_io(S), [_out(S // 2, S // 2)])
+    t = NanoTrack(mf, backbone=bb, head=hd, model=bb)
     assert t._window_influence == 0.99
     assert t._context == 0.7
 
@@ -59,8 +74,9 @@ def test_manifest_preprocessing_reaches_nanotrack():
 def test_explicit_kwarg_overrides_manifest():
     mf = ModelManifest(name="t", task="sot_template_matching",
                        preprocessing={"window_influence": 0.99})
-    t = NanoTrack(mf, model=ScriptedModel(nano_io(S), [_out(S // 2, S // 2)]),
-                  window_influence=0.1)
+    bb = ScriptedModel(nano_backbone_io(), [{"output": nano_z_feat()}])
+    hd = ScriptedModel(nano_head_io(S), [_out(S // 2, S // 2)])
+    t = NanoTrack(mf, backbone=bb, head=hd, model=bb, window_influence=0.1)
     assert t._window_influence == 0.1
 
 
@@ -70,7 +86,7 @@ def test_nn_package_exports_nanotrack():
 
 
 def test_centred_peak_keeps_centre():
-    # symmetric loc (l==r, t==b) + centred fg peak -> no displacement.
+    # symmetric loc (left==r, t==b) + centred fg peak -> no displacement.
     t = _nano([_out(S // 2, S // 2)], window_influence=0.0)
     t.init(_frame(), _box())
     res = t.update(_frame())
@@ -103,7 +119,7 @@ def test_window_suppresses_far_peak():
     # one frame: a near peak and a far peak of equal fg logit; high window
     # influence makes the near peak win (centre stays near image centre).
     out = _out(S // 2, S // 2)
-    out["cls"][0, 1, 0, 0] = 8.0                      # add an equal far peak at corner
+    out["output1"][0, 1, 0, 0] = 8.0               # add an equal far peak at corner
     t = _nano([out], window_influence=0.9)
     t.init(_frame(), _box())
     res = t.update(_frame())
@@ -119,8 +135,8 @@ def test_high_score_locks_low_score_lost():
 
     # all-zero cls logits -> fg prob 0.5 everywhere -> below score_lock(0.6) and
     # above score_lost(0.35) -> COASTING.
-    coasting = _nano([{"cls": np.zeros((1, 2, S, S), np.float32),
-                       "loc": loc_const(S, 8, 8, 8, 8)}])
+    coasting = _nano([{"output1": np.zeros((1, 2, S, S), np.float32),
+                       "output2": loc_const(S, 8, 8, 8, 8)}])
     coasting.init(_frame(), _box())
     assert coasting.update(_frame()).status == TrackStatus.COASTING
 

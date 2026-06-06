@@ -53,6 +53,36 @@ def nano_io(score_size: int = 15) -> IOSpec:
                  TensorSpec("loc", (1, 4, score_size, score_size), "float32")))
 
 
+def nano_backbone_io() -> IOSpec:
+    """Split backbone: 255x255 input -> 96ch 16x16 features."""
+    return IOSpec(
+        inputs=(TensorSpec("input", (1, 3, 255, 255), "float32"),),
+        outputs=(TensorSpec("output", (1, 96, 16, 16), "float32"),))
+
+
+def nano_head_io(score_size: int = 15) -> IOSpec:
+    """Split head: z_f (1,96,8,8) + x_f (1,96,16,16) -> cls, loc."""
+    return IOSpec(
+        inputs=(TensorSpec("input1", (1, 96, 8, 8), "float32"),
+                TensorSpec("input2", (1, 96, 16, 16), "float32")),
+        outputs=(TensorSpec("output1", (1, 2, score_size, score_size), "float32"),
+                 TensorSpec("output2", (1, 4, score_size, score_size), "float32")))
+
+
+def nano_z_feat() -> np.ndarray:
+    """Dummy backbone output: (1, 96, 16, 16) feature for z_f centre-crop."""
+    return np.zeros((1, 96, 16, 16), np.float32)
+
+
+def nano_head_out(score_size: int, cy: int, cx: int,
+                  left: float = 8.0, top: float = 8.0,
+                  right: float = 8.0, bottom: float = 8.0,
+                  fg: float = 8.0) -> dict[str, np.ndarray]:
+    """Single head output dict with cls/loc for NanoTrack tests."""
+    return {"output1": cls_peaked(score_size, cy, cx, fg),
+            "output2": loc_const(score_size, left, top, right, bottom)}
+
+
 def cls_peaked(score_size: int, cy: int, cx: int, fg: float = 8.0) -> np.ndarray:
     """cls logits (1,2,S,S): bg channel 0, fg channel 1 with a high logit at (cy,cx)
     so softmax fg prob ≈ 1 there and 0.5 elsewhere."""
