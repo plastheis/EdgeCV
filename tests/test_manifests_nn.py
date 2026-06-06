@@ -31,3 +31,14 @@ def test_yolo26s_manifest_loads():
 
 def test_yolo_generic_is_retired():
     assert not (MANIFESTS / "yolo_generic.yaml").exists()
+
+
+def test_nanotrack_manifest_loads():
+    m = load_manifest(MANIFESTS / "nanotrack.yaml")
+    assert m.name == "nanotrack"
+    assert m.task == "sot_template_matching"
+    assert {i["name"] for i in m.inputs} == {"exemplar", "search"}
+    assert [o["name"] for o in m.outputs] == ["cls", "loc"]
+    assert m.preprocessing["penalty_k"] == 0.138
+    assert m.preprocessing["window_influence"] == 0.455
+    assert m.artifacts["onnx"]["path"] == "nanotrack.onnx"
