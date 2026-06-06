@@ -174,3 +174,18 @@ def test_detector_default_when_absent_from_manifest():
     det = YoloDetector(model=ScriptedModel(_yolo_io(), [_raw([])]), output_format="yolov5")
     assert det._conf == 0.25          # hardcoded default
     assert det._output_format == "yolov5"
+
+
+def test_tracker_reads_preprocessing_from_manifest():
+    mf = _pp_manifest(conf_thresh=0.5, output_format="yolov8")
+    t = YoloTracker(manifest=mf, model=ScriptedModel(_yolo_io_v8(), [_raw_v8([])]),
+                    input_size=IN)
+    assert t._detector._conf == 0.5
+    assert t._detector._output_format == "yolov8"
+
+
+def test_tracker_explicit_kwarg_overrides_manifest():
+    mf = _pp_manifest(conf_thresh=0.5)
+    t = YoloTracker(manifest=mf, model=ScriptedModel(_yolo_io(), [_raw([])]),
+                    input_size=IN, conf_thresh=0.9, output_format="yolov5")
+    assert t._detector._conf == 0.9

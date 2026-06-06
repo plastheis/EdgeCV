@@ -94,10 +94,17 @@ class YoloDetector:
 
 class YoloTracker(NNTracker):
     def __init__(self, manifest=None, *, backend="auto", model=None,
-                 search_factor=3.0, assoc_sigma=0.5, conf_thresh=0.25,
-                 iou_thresh=0.45, max_misses=5, input_size=640,
-                 color="rgb", scale=1.0 / 255.0, output_format="yolov5") -> None:
+                 search_factor=3.0, assoc_sigma=0.5, conf_thresh=UNSET,
+                 iou_thresh=UNSET, max_misses=5, input_size=UNSET,
+                 color=UNSET, scale=UNSET, output_format=UNSET) -> None:
         super().__init__(manifest, backend=backend, model=model)
+        pp = self._preprocessing
+        input_size = resolve_pp(input_size, pp, "input", 640)
+        color = resolve_pp(color, pp, "color", "rgb")
+        scale = resolve_pp(scale, pp, "scale", 1.0 / 255.0)
+        output_format = resolve_pp(output_format, pp, "output_format", "yolov8")
+        conf_thresh = resolve_pp(conf_thresh, pp, "conf_thresh", 0.25)
+        iou_thresh = resolve_pp(iou_thresh, pp, "iou_thresh", 0.45)
         self._detector = YoloDetector(
             model=self._model, input_size=input_size, color=color, scale=scale,
             output_format=output_format, conf_thresh=conf_thresh, iou_thresh=iou_thresh)
