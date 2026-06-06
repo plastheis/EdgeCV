@@ -53,3 +53,19 @@ def test_centered_square_clamps_size():
 )
 def test_status_color(status, expected):
     assert tw.status_color(status) == expected
+
+
+def test_tracker_names_include_nn():
+    assert set(tw.TRACKERS) >= {"mosse", "siamfc", "yolo"}
+
+
+def test_build_tracker_mosse_needs_no_model():
+    t = tw.build_tracker("mosse")
+    assert type(t).__name__ == "Mosse"
+    t.close()
+
+
+@pytest.mark.parametrize("name", ["siamfc", "yolo"])
+def test_build_tracker_missing_model_errors_clearly(name):
+    with pytest.raises(FileNotFoundError, match="ONNX model"):
+        tw.build_tracker(name, model_path="/no/such/model.onnx")

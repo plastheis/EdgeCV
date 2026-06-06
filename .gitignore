@@ -11,3 +11,7 @@ venv/
 .ruff_cache/
 .claude/
 *.rknn
+
+# model weight blobs (host-only; deferred, not committed)
+*.onnx
+/models/

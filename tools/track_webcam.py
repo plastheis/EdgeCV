@@ -16,12 +16,15 @@ import argparse
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackStatus
 from edgecv.core.tracker import Tracker
+from edgecv.models.manifest import load_manifest
 from edgecv.trackers.cf import Mosse
+from edgecv.trackers.nn import SiamFC, YoloTracker
 
 if TYPE_CHECKING:
     import cv2
@@ -42,9 +45,42 @@ ORANGE = (0, 165, 255)
 YELLOW = (0, 255, 255)
 RED = (0, 0, 255)
 
-TRACKERS: dict[str, Callable[[], Tracker]] = {
-    "mosse": Mosse,
+_ROOT = Path(__file__).resolve().parent.parent
+MANIFESTS_DIR = _ROOT / "edgecv" / "models" / "manifests"
+MODELS_DIR = _ROOT / "models"
+
+# NN trackers that need an ONNX model: name -> (factory, manifest filename).
+_NN_TRACKERS: dict[str, tuple[Callable[..., Tracker], str]] = {
+    "siamfc": (SiamFC, "siamfc_generic.yaml"),
+    "yolo": (YoloTracker, "yolo_generic.yaml"),
 }
+# All selectable tracker names (mosse is zero-arg; NN trackers load weights).
+TRACKERS: tuple[str, ...] = ("mosse", *_NN_TRACKERS)
+
+
+def build_tracker(name: str, model_path: str | None = None) -> Tracker:
+    """Construct a tracker by name.
+
+    ``mosse`` needs no model. ``siamfc``/``yolo`` load an ONNX model on the onnx
+    backend: from ``model_path`` if given, else ``models/<artifact>.onnx`` resolved
+    from the bundled manifest. Raises FileNotFoundError if the weights are absent.
+    """
+    if name == "mosse":
+        return Mosse()
+    cls, manifest_file = _NN_TRACKERS[name]
+    manifest = load_manifest(MANIFESTS_DIR / manifest_file)
+    if model_path:
+        weights = Path(model_path)
+    else:
+        artifact = manifest.artifacts.get("onnx") or {}
+        weights = MODELS_DIR / Path(artifact.get("path", f"{name}.onnx")).name
+    if not weights.is_file():
+        raise FileNotFoundError(
+            f"{name} needs an ONNX model; expected {weights}. "
+            f"Pass --model PATH, or drop the weights file in {MODELS_DIR}/."
+        )
+    manifest.artifacts["onnx"] = {"path": str(weights)}
+    return cls(manifest, backend="onnx")
 
 
 # --- pure helpers (unit-tested; no cv2) ---
@@ -81,10 +117,10 @@ def _draw_box(display, pix: PixelBox, color: tuple[int, int, int], thickness: in
 
 
 def _draw_hud(
-    display, name: str, status_text: str, psr: float | None, fps: float
+    display, name: str, status_text: str, conf: float | None, fps: float
 ) -> None:
-    psr_text = f"{psr:.1f}" if psr is not None else "--"
-    line1 = f"{name} | PSR {psr_text} | {status_text} | {fps:.0f} FPS"
+    conf_text = f"{conf:.1f}" if conf is not None else "--"
+    line1 = f"{name} | conf {conf_text} | {status_text} | {fps:.0f} FPS"
     line2 = "[space] lock  [r] release  [+/-] size  [q] quit"
     font = cv2.FONT_HERSHEY_SIMPLEX
     for text, y, scale in ((line1, 24, 0.6), (line2, 48, 0.5)):
@@ -99,6 +135,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--camera", type=int, default=0, help="VideoCapture index (default 0)")
     parser.add_argument(
         "--tracker", choices=sorted(TRACKERS), default="mosse", help="tracker to run"
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="ONNX model path for NN trackers (siamfc/yolo); "
+             "default models/<artifact>.onnx",
     )
     parser.add_argument("--width", type=int, default=None, help="requested capture width")
     parser.add_argument("--height", type=int, default=None, help="requested capture height")
@@ -118,6 +159,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Build once up front: fail fast on a missing/unloadable model, and reuse the
+    # (possibly heavy) ONNX session across lock/release cycles via init().
+    try:
+        tracker = build_tracker(args.tracker, args.model)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(e, file=sys.stderr)
+        return 1
+
     cap = cv2.VideoCapture(args.camera)
     if args.width:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
@@ -125,10 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
     if not cap.isOpened():
         print(f"could not open camera index {args.camera}", file=sys.stderr)
+        tracker.close()
         return 1
 
-    make_tracker = TRACKERS[args.tracker]
-    tracker: Tracker | None = None
+    locked = False
     box_px = DEFAULT_BOX_PX
     fps = 0.0
     last = time.monotonic()
@@ -151,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                 inst = 1.0 / dt
                 fps = inst if fps == 0.0 else 0.9 * fps + 0.1 * inst
 
-            if tracker is None:
+            if not locked:
                 box_px = clamp_box_size(box_px, h, w)
                 _draw_box(display, centered_square(h, w, box_px), WHITE)
                 _draw_hud(display, args.tracker.upper(), "SETUP", None, fps)
@@ -166,20 +215,21 @@ def main(argv: list[str] | None = None) -> int:
             if key in (ord("q"), 27):
                 break
             elif key == ord("r"):
-                tracker = None
-            elif key == ord(" ") and tracker is None:
+                locked = False
+            elif key == ord(" ") and not locked:
                 box_px = clamp_box_size(box_px, h, w)
                 bbox = BoundingBox.from_pixels(centered_square(h, w, box_px), w, h)
-                tracker = make_tracker()
                 tracker.init(rgb, bbox)
-            elif key in (ord("+"), ord("=")) and tracker is None:
+                locked = True
+            elif key in (ord("+"), ord("=")) and not locked:
                 box_px = clamp_box_size(box_px + BOX_STEP_PX, h, w)
-            elif key in (ord("-"), ord("_")) and tracker is None:
+            elif key in (ord("-"), ord("_")) and not locked:
                 box_px = clamp_box_size(box_px - BOX_STEP_PX, h, w)
         return 0
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        tracker.close()
 
 
 if __name__ == "__main__":
