@@ -52,7 +52,7 @@ MODELS_DIR = _ROOT / "models"
 # NN trackers that need an ONNX model: name -> (factory, manifest filename).
 _NN_TRACKERS: dict[str, tuple[Callable[..., Tracker], str]] = {
     "siamfc": (SiamFC, "siamfc_generic.yaml"),
-    "yolo": (YoloTracker, "yolo_generic.yaml"),
+    "yolo": (YoloTracker, "yolo26n.yaml"),
 }
 # All selectable tracker names (mosse is zero-arg; NN trackers load weights).
 TRACKERS: tuple[str, ...] = ("mosse", *_NN_TRACKERS)
