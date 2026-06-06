@@ -26,7 +26,7 @@ rknn = []
 # Host-only conversion tooling (ARCHITECTURE.md §11). Not a runtime dependency.
 # torch>=2.5 for the `dynamo=False` export kwarg (forces the legacy ONNX exporter,
 # avoiding the onnxscript dep the torch>=2.9 default exporter pulls in).
-dev = ["torch>=2.5", "onnx>=1.15"]
+dev = ["torch>=2.5", "onnx>=1.15", "ultralytics>=8.3"]
 # onnxruntime runs the onnx backend; onnx (builder) synthesizes throwaway models for the
 # NN-tracker onnx integration test. Both are here so `pip install -e .[test]` exercises the
 # real onnx path without separately pulling the [onnx] extra.
