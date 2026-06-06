@@ -86,6 +86,26 @@ def test_to_input_int8_quant():
     assert int(arr.flat[0]) == -3
 
 
+def test_points_grid_shape_and_centre():
+    from edgecv.trackers.nn.preprocess import points_grid
+    pts = points_grid(stride=16, size=15)
+    assert pts.shape == (2, 15 * 15)
+    centre = (15 // 2) * 15 + (15 // 2)        # row-major index of the middle cell
+    assert pts[0, centre] == 0.0               # x at centre is 0
+    assert pts[1, centre] == 0.0               # y at centre is 0
+
+
+def test_points_grid_spacing_and_row_major():
+    from edgecv.trackers.nn.preprocess import points_grid
+    pts = points_grid(stride=16, size=15)
+    # index = row*size + col ; x varies with col, y varies with row.
+    assert pts[0, 0] == -(15 // 2) * 16        # top-left x = ori
+    assert pts[1, 0] == -(15 // 2) * 16        # top-left y = ori
+    assert pts[0, 1] - pts[0, 0] == 16         # next column is +stride in x
+    assert pts[1, 0] == pts[1, 14]             # whole first row shares one y
+    assert pts[1, 15] - pts[1, 0] == 16        # next row is +stride in y
+
+
 def test_class_agnostic_nms_suppresses_overlap():
     boxes = np.array([[0, 0, 10, 10], [1, 1, 11, 11], [50, 50, 60, 60]], np.float32)
     scores = np.array([0.9, 0.8, 0.7], np.float32)

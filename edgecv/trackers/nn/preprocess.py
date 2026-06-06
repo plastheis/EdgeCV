@@ -143,6 +143,17 @@ def to_input(patch: np.ndarray, spec: TensorSpec, *, color: str = "rgb",
     return chw.astype(np.dtype(spec.dtype))
 
 
+def points_grid(stride: int, size: int) -> np.ndarray:
+    """Anchor-free point centres for a size×size head, in search-image pixels
+    centred at 0. Returns (2, size*size): row 0 = x, row 1 = y, flattened
+    row-major (index = row*size + col), matching a (C, S, S)->(C, S*S) reshape.
+    Mirrors NanoTrack's generate_points: ori = -(size//2)*stride."""
+    ori = -(size // 2) * stride
+    coords = (ori + stride * np.arange(size)).astype(np.float32)
+    gx, gy = np.meshgrid(coords, coords)          # gx[r,c]=coords[c], gy[r,c]=coords[r]
+    return np.stack([gx.reshape(-1), gy.reshape(-1)], axis=0)
+
+
 def class_agnostic_nms(boxes_xyxy: np.ndarray, scores: np.ndarray,
                        iou_thresh: float) -> np.ndarray:
     """Greedy NMS over a single pool (class labels ignored). Returns kept indices."""
