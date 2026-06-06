@@ -28,6 +28,30 @@ def build_siamfc_onnx(path: str, score_size: int = 17) -> None:
     onnx.save(model, path)
 
 
+def build_yolo_onnx_v8(path: str, n: int = 64, num: int = 3, nc: int = 1) -> None:
+    """YOLO26 one-to-many layout: channels-first (1, 4+nc, num), NO objectness.
+    Box in channels [:4], class scores in channels [4:]. Shape-correct, not trained."""
+    img = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, n, n])
+    out = helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, 4 + nc, num])
+    dets = np.zeros((1, 4 + nc, num), np.float32)
+    dets[0, :4, 0] = [n / 2, n / 2, 16, 16]   # centred
+    dets[0, 4, 0] = 0.9
+    dets[0, :4, 1] = [4, 4, 8, 8]             # corner
+    dets[0, 4, 1] = 0.95                       # third column stays zero -> thresholded out
+    const = helper.make_node("Constant", [], ["dets_out"],
+                             value=numpy_helper.from_array(dets, "dets"))
+    zinit = numpy_helper.from_array(np.array(0.0, np.float32), "zero_scalar")
+    rm = helper.make_node("ReduceMean", ["images"], ["img_mean"], keepdims=0)  # scalar
+    mul = helper.make_node("Mul", ["img_mean", "zero_scalar"], ["zeroed"])
+    # consumes images, value unchanged
+    add = helper.make_node("Add", ["dets_out", "zeroed"], ["output0"])
+    graph = helper.make_graph([const, rm, mul, add], "yolo_v8_stub", [img], [out],
+                              initializer=[zinit])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+
+
 def build_yolo_onnx(path: str, n: int = 64, num: int = 3, nc: int = 1) -> None:
     img = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, n, n])
     out = helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, num, 5 + nc])
