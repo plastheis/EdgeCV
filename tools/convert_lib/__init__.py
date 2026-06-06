@@ -56,7 +56,7 @@ def run(model: str, checkpoint: str, out: str | None = None, *,
         ) from None
     try:
         module = adapter.build(checkpoint)
-    except RuntimeError as e:
+    except (RuntimeError, OSError) as e:   # strict-load mismatch, missing/corrupt file
         raise SystemExit(f"failed to load checkpoint for {model!r}: {e}") from e
 
     in_names = [i["name"] for i in mf.inputs]

@@ -44,33 +44,31 @@ PyTorch export for an INT8 `.rknn` is a manifest change, not a code change.
 
 ### The conversion pipeline (host-only)
 
-Conversion runs **offline on x86**; the device only ever runs the lite runtime.
-Install the tooling deps and use the scripts in `tools/`:
+Conversion runs **offline on x86**; the device only ever runs the lite runtime. One
+manifest-driven dispatcher (`tools/convert.py`) converts any registered model:
 
 ```bash
 pip install -e .[dev]          # torch + onnx for export/validation
+
+# PyTorch checkpoint -> ONNX (writes the manifest's resolved artifact path under models/)
+python tools/convert.py --model siamfc_generic --checkpoint models/siamfc_alexnet_e50.pth
+
+# ...and chain to an RK3588 INT8 RKNN (needs rknn-toolkit2 + calibration images)
+python tools/convert.py --model siamfc_generic --checkpoint models/siamfc_alexnet_e50.pth \
+    --rknn --calib calib/
 ```
 
-| Step | Tool | Output |
-|------|------|--------|
-| PyTorch → **ONNX** (portable; x86 dev + CI) | per-model script, e.g. `tools/siamfc_to_onnx.py` | `models/<name>.onnx` |
-| ONNX → **RKNN** (on-device NPU, INT8) | `tools/onnx_to_rknn.py` (needs `rknn-toolkit2` + calibration images) | `models/<name>.rk3588.rknn` |
+Conversion is three stages; only the first is model-specific: load checkpoint →
+`nn.Module` (a per-model **adapter**), export → ONNX (generic harness: export +
+`onnx.checker` + torch-vs-onnxruntime parity), ONNX → RKNN (generic, optional). I/O names
+and shapes come from the model's manifest, so the converter and the runtime backend never
+disagree.
 
-```bash
-# example: SiamFC checkpoint -> ONNX (parity-checked against the torch model)
-python tools/siamfc_to_onnx.py --checkpoint models/siamfc_alexnet_e50.pth \
-    --out models/siamfc_generic.onnx
-
-# example: ONNX -> RKNN for the RK3588 NPU (run on an x86 host with rknn-toolkit2)
-python tools/onnx_to_rknn.py --onnx models/siamfc_generic.onnx \
-    --out models/siamfc_generic.rk3588.rknn --target rk3588 \
-    --calibration-dir calib/ --inputs exemplar search
-```
-
-**Adding a new model** follows the same shape: write a host script under `tools/`
-that emits a backend artifact into `models/`, then add (or extend) a manifest that
-points at it. Full command reference, the preprocessing contract, and INT8
-calibration notes are in **[`tools/CONVERSION.md`](tools/CONVERSION.md)**.
+**Adding a new model** = one ~20-line adapter (`tools/convert_lib/adapters/<name>.py`) that
+turns a checkpoint into a loaded module, registered against a manifest — then
+`python tools/convert.py --model <name> --checkpoint <pth>`. Full mechanics, the
+add-a-tracker recipe, the preprocessing contract, and INT8 calibration notes are in
+**[`tools/CONVERSION.md`](tools/CONVERSION.md)**.
 
 ## Status
 
