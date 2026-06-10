@@ -49,6 +49,20 @@ class RknnModel(Model):
         self._rknn: Any = rknn
         self._io_spec = io_spec
         self._output_order = output_order
+        # RKNNLite.inference defaults a 4-D input's data_format to NHWC and will
+        # silently transpose whatever buffer it is handed to match — so feeding an
+        # NCHW tensor without declaring its layout corrupts the data (channels get
+        # read as spatial). Declare the inputs' layout so the runtime keeps the
+        # buffer intact. (Empirically: omitting this drops backbone-vs-ONNX
+        # correlation to ~0.38 and breaks tracking; declaring 'nchw' restores 1.0.)
+        # RKNNLite takes a single data_format string applied to every input (a
+        # list raises "Unsupport data format"), so all inputs must share a layout.
+        layouts = {s.layout.lower() for s in io_spec.inputs}
+        if len(layouts) > 1:
+            raise ValueError(
+                f"rknn backend needs a single input layout, got {sorted(layouts)}"
+            )
+        self._data_format = layouts.pop() if layouts else "nchw"
 
     @property
     def io_spec(self) -> IOSpec:
@@ -56,7 +70,7 @@ class RknnModel(Model):
 
     def infer(self, inputs: dict) -> dict:
         ordered = [inputs[s.name] for s in self._io_spec.inputs]
-        results = self._rknn.inference(inputs=ordered)
+        results = self._rknn.inference(inputs=ordered, data_format=self._data_format)
         # RKNNLite returns outputs positionally; manifest.outputs must match the
         # compiled model's output order exactly (RKNNLite has no output-name API).
         # strict=True surfaces a count mismatch loudly instead of truncating.
