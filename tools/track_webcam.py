@@ -23,8 +23,10 @@ from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackStatus
 from edgecv.core.tracker import Tracker
 from edgecv.models.manifest import load_manifest
+from edgecv.models.paths import resolve_artifact_path
 from edgecv.trackers.cf import Mosse
-from edgecv.trackers.nn import SiamFC, YoloTracker
+from edgecv.trackers.nn import NanoTrack, SiamFC, YoloTracker
+from edgecv.trackers.nn.base import select_backend
 
 if TYPE_CHECKING:
     import cv2
@@ -49,26 +51,45 @@ _ROOT = Path(__file__).resolve().parent.parent
 MANIFESTS_DIR = _ROOT / "edgecv" / "models" / "manifests"
 MODELS_DIR = _ROOT / "models"
 
-# NN trackers that need an ONNX model: name -> (factory, manifest filename).
 _NN_TRACKERS: dict[str, tuple[Callable[..., Tracker], str]] = {
     "siamfc": (SiamFC, "siamfc_generic.yaml"),
     "yolo": (YoloTracker, "yolo26n.yaml"),
 }
-# All selectable tracker names (mosse is zero-arg; NN trackers load weights).
-TRACKERS: tuple[str, ...] = ("mosse", *_NN_TRACKERS)
+# NanoTrack needs two separate ONNX models (backbone + head).
+_NANOTRACK_MANIFEST = "nanotrack.yaml"
+# All selectable tracker names.
+TRACKERS: tuple[str, ...] = (
+    "mosse", *_NN_TRACKERS, "nanotrack"
+)
 
 
-def build_tracker(name: str, model_path: str | None = None) -> Tracker:
+def build_tracker(name: str, model_path: str | None = None,
+                  backend: str = "auto") -> Tracker:
     """Construct a tracker by name.
 
-    ``mosse`` needs no model. ``siamfc``/``yolo`` load an ONNX model on the onnx
-    backend: from ``model_path`` if given, else ``models/<artifact>.onnx`` resolved
-    from the bundled manifest. Raises FileNotFoundError if the weights are absent.
+    ``mosse`` needs no model. NN trackers (``siamfc``/``yolo``) load a single
+    model. ``nanotrack`` loads two models (backbone + head). ``backend`` selects
+    the inference backend (``onnx`` on the host, ``rknn`` on the Rockchip NPU;
+    ``auto`` prefers rknn then onnx).
+
+    Raises FileNotFoundError if required model weights are absent.
     """
     if name == "mosse":
         return Mosse()
-    cls, manifest_file = _NN_TRACKERS[name]
+
+    # --- nanotrack: split backbone + head models ---
+    if name == "nanotrack":
+        return _build_nanotrack(model_path, backend)
+
+    # --- single-model NN trackers ---
+    if name in _NN_TRACKERS:
+        cls, manifest_file = _NN_TRACKERS[name]
+    else:
+        raise ValueError(f"unknown tracker: {name}")
+
     manifest = load_manifest(MANIFESTS_DIR / manifest_file)
+
+    # Standalone NN trackers: validate the ONNX model exists.
     if model_path:
         weights = Path(model_path)
     else:
@@ -81,6 +102,33 @@ def build_tracker(name: str, model_path: str | None = None) -> Tracker:
         )
     manifest.artifacts["onnx"] = {"path": str(weights)}
     return cls(manifest, backend="onnx")
+
+
+def _build_nanotrack(model_path: str | None = None,
+                     backend: str = "auto") -> NanoTrack:
+    """Build NanoTrack from its split backbone + head artifacts.
+
+    ``backend`` picks the inference backend: ``onnx`` (host) or ``rknn`` (Rockchip
+    NPU); ``auto`` prefers rknn then onnx. The same logical manifest names both the
+    .onnx and .rknn artifacts, so only the backend changes between host and device.
+    ``--model`` is ignored here: NanoTrack needs two distinct model files.
+    """
+    manifest = load_manifest(MANIFESTS_DIR / _NANOTRACK_MANIFEST)
+    name = select_backend(backend)
+
+    # Preflight: a friendly error if either artifact file for this backend is
+    # missing (the backend's own load() would otherwise fail more opaquely).
+    for key in ("backbone", "head"):
+        art = (manifest.artifacts.get(key) or {}).get(name) or {}
+        path = art.get("path")
+        if path and not Path(resolve_artifact_path(path)).is_file():
+            raise FileNotFoundError(
+                f"nanotrack[{name}] needs a model for {key!r}; expected "
+                f"{resolve_artifact_path(path)}. Convert/drop the weights in "
+                f"{MODELS_DIR}/ (see tools/CONVERSION.md for ONNX->RKNN)."
+            )
+
+    return NanoTrack.from_manifest(manifest, backend=name)
 
 
 # --- pure helpers (unit-tested; no cv2) ---
@@ -134,12 +182,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--camera", type=int, default=0, help="VideoCapture index (default 0)")
     parser.add_argument(
-        "--tracker", choices=sorted(TRACKERS), default="mosse", help="tracker to run"
+        "--tracker", choices=sorted(TRACKERS), default=None,
+        help="tracker to run (default: show available and exit)",
     )
     parser.add_argument(
         "--model", type=str, default=None,
         help="ONNX model path for NN trackers (siamfc/yolo); "
              "default models/<artifact>.onnx",
+    )
+    parser.add_argument(
+        "--backend", choices=["auto", "onnx", "rknn"], default="auto",
+        help="inference backend for NN/nanotrack trackers "
+             "(onnx=host, rknn=Rockchip NPU; default auto)",
     )
     parser.add_argument("--width", type=int, default=None, help="requested capture width")
     parser.add_argument("--height", type=int, default=None, help="requested capture height")
@@ -149,8 +203,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    if args.list:
-        print("\n".join(sorted(TRACKERS)))
+    if args.list or args.tracker is None:
+        print("Available trackers:")
+        for t in sorted(TRACKERS):
+            print(f"  {t}")
+        if args.list:
+            return 0
+        print("\nPass --tracker NAME to select one.")
         return 0
     if cv2 is None:
         print(
@@ -162,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     # Build once up front: fail fast on a missing/unloadable model, and reuse the
     # (possibly heavy) ONNX session across lock/release cycles via init().
     try:
-        tracker = build_tracker(args.tracker, args.model)
+        tracker = build_tracker(args.tracker, args.model, args.backend)
     except (FileNotFoundError, RuntimeError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -203,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
             if not locked:
                 box_px = clamp_box_size(box_px, h, w)
                 _draw_box(display, centered_square(h, w, box_px), WHITE)
-                _draw_hud(display, args.tracker.upper(), "SETUP", None, fps)
+                _draw_hud(display, tracker.name(), "SETUP — press SPACE to lock", None, fps)
             else:
                 result = tracker.update(rgb)
                 if result.bbox is not None:

@@ -12,7 +12,7 @@ import ctypes
 import numpy as np
 
 MAGIC = 0xED6EC711          # "edgecv" tag; arbitrary but fixed
-ABI_VERSION = 1
+ABI_VERSION = 2
 
 # numpy dtype <-> stable integer code. Append-only; never renumber.
 _CODE_TO_NAME: dict[int, str] = {
@@ -61,6 +61,26 @@ class FrameControl(ctypes.Structure):
         ("w", ctypes.c_uint32),
         ("c", ctypes.c_uint32),
         ("dtype_code", ctypes.c_uint32),
+    ]
+
+
+class SearchROIControl(ctypes.Structure):
+    """Control word for the search-ROI channel (caller → detector worker).
+
+    Published by the caller/sender at full frame rate. Carries a normalised
+    bounding box (the crop region for local detection).
+    """
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("seq", ctypes.c_uint64),
+        ("seqlock", ctypes.c_uint64),
+        ("x", ctypes.c_double),
+        ("y", ctypes.c_double),
+        ("w", ctypes.c_double),
+        ("h", ctypes.c_double),
+        ("timestamp", ctypes.c_double),
     ]
 
 

@@ -46,7 +46,7 @@ class Template:
     meta: dict
 
 
-def _select_backend(backend: str) -> str:
+def select_backend(backend: str) -> str:
     if backend != "auto":
         return backend
     avail = available_backends()
@@ -70,7 +70,7 @@ def resolve_model(
     if manifest is None:
         raise ValueError("NNTracker needs a manifest (or an injected model=)")
     mf = manifest if isinstance(manifest, ModelManifest) else load_manifest(manifest)
-    return get_backend(_select_backend(backend)).load(mf)
+    return get_backend(select_backend(backend)).load(mf)
 
 
 class NNTracker(Tracker):

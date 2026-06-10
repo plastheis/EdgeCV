@@ -8,13 +8,44 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 
 import numpy as np
 
+from edgecv.backends.base import InferenceBackend
+from edgecv.backends.registry import get_backend
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackResult, TrackStatus
-from edgecv.trackers.nn.base import UNSET, NNTracker, Template, resolve_pp
+from edgecv.models.manifest import ModelManifest, load_manifest
+from edgecv.trackers.nn.base import UNSET, NNTracker, Template, resolve_pp, select_backend
 from edgecv.trackers.nn.preprocess import crop_with_context, points_grid, to_input
+
+
+def _split_submanifest(mf: ModelManifest, key: str, backend: str) -> ModelManifest:
+    """A single-model manifest for one half (backbone/head) of a split NanoTrack.
+
+    Carries that half's own io (so the RKNN backend, which has no name API, builds
+    the right IOSpec and positional output order) and just that backend's artifact.
+    """
+    art = mf.artifacts.get(key)
+    if not art:
+        raise ValueError(
+            f"manifest {mf.name!r} has no {key!r} artifact for split NanoTrack"
+        )
+    backend_art = art.get(backend)
+    if not backend_art or "path" not in backend_art:
+        raise ValueError(
+            f"{key!r} artifact in manifest {mf.name!r} has no {backend!r} path"
+        )
+    io = art.get("io") or {}
+    return ModelManifest(
+        name=f"{mf.name}_{key}",
+        task=mf.task,
+        preprocessing=dict(mf.preprocessing),
+        inputs=list(io.get("inputs") or []),
+        outputs=list(io.get("outputs") or []),
+        artifacts={backend: dict(backend_art)},
+    )
 
 
 def _hann2d(n: int) -> np.ndarray:
@@ -75,6 +106,30 @@ class NanoTrack(NNTracker):
         self._hann = _hann2d(self._score_size)
         self._template: Template | None = None
         self._box: BoundingBox | None = None
+
+    @classmethod
+    def from_manifest(cls, manifest: ModelManifest | str | Path,
+                      *, backend: str = "auto",
+                      backend_obj: InferenceBackend | None = None,
+                      **kwargs) -> NanoTrack:
+        """Build a NanoTrack by loading its split backbone + head sub-models.
+
+        Backend-agnostic: ``backend="rknn"`` runs on the Rockchip NPU, ``"onnx"``
+        on the host/CI — both load the two artifacts named in the manifest's
+        ``backbone``/``head`` entries. ``backend_obj`` injects a backend instance
+        (tests; on-device the worker passes the resolved backend). Loading happens
+        here, so for the rknn backend this MUST run inside the worker process that
+        will use it (ARCHITECTURE.md §7.4, §14.7) — never in the parent.
+        """
+        mf = manifest if isinstance(manifest, ModelManifest) else load_manifest(manifest)
+        name = select_backend(backend)
+        be = backend_obj if backend_obj is not None else get_backend(name)
+        backbone = be.load(_split_submanifest(mf, "backbone", name))
+        head = be.load(_split_submanifest(mf, "head", name))
+        # model=backbone satisfies the base single-model close() path without a
+        # third load; NanoTrack.close() tears down backbone and head explicitly.
+        return cls(mf, backend=name, model=backbone,
+                   backbone=backbone, head=head, **kwargs)
 
     def name(self) -> str:
         return "NanoTrack"

@@ -12,6 +12,7 @@ venv/
 .claude/
 .pi/
 *.rknn
+runs/
 
 # model weight blobs (host-only; deferred, not committed)
 *.onnx

@@ -19,6 +19,8 @@ preprocessing:
   penalty_k: 0.138
   window_influence: 0.455
   size_lr: 0.348
+# Combined exemplar/search -> cls/loc spec (documentation; the runtime uses the
+# split backbone/head artifacts below, which carry their own per-model io).
 io:
   inputs:
     - { name: exemplar, shape: [1, 3, 127, 127], dtype: float32 }
@@ -26,8 +28,27 @@ io:
   outputs:
     - { name: cls, shape: [1, 2, 15, 15], dtype: float32 }
     - { name: loc, shape: [1, 4, 15, 15], dtype: float32 }
+# Split two-model artifacts. Each carries per-backend paths (onnx for host/CI,
+# rknn for the Rockchip NPU — INT8) and its own io. Input order MUST match the
+# compiled graph: backbone (one image in -> 16x16 feature out); head (z_f 8x8,
+# x_f 16x16 in -> cls, loc out). RKNNLite returns outputs positionally, so the
+# io.outputs order is the compiled-model output order.
 artifacts:
-  backbone: { path: nanotrack_backbone.onnx }
-  head: { path: nanotrack_head.onnx }
-  onnx: { path: nanotrack.onnx }
-  rknn: { path: nanotrack.rk3588.rknn, quant: int8 }
+  backbone:
+    onnx: { path: nanotrack_backbone.onnx }
+    rknn: { path: nanotrack_backbone.rknn, quant: int8 }
+    io:
+      inputs:
+        - { name: input, shape: [1, 3, 255, 255], dtype: float32 }
+      outputs:
+        - { name: output, shape: [1, 96, 16, 16], dtype: float32 }
+  head:
+    onnx: { path: nanotrack_head.onnx }
+    rknn: { path: nanotrack_head.rknn, quant: int8 }
+    io:
+      inputs:
+        - { name: input1, shape: [1, 96, 8, 8],   dtype: float32 }
+        - { name: input2, shape: [1, 96, 16, 16], dtype: float32 }
+      outputs:
+        - { name: output1, shape: [1, 2, 15, 15], dtype: float32 }
+        - { name: output2, shape: [1, 4, 15, 15], dtype: float32 }

@@ -13,6 +13,7 @@ import numpy as np
 
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackResult, TrackStatus
+from edgecv.fusion.calibrator import LinearCalibrator
 from edgecv.trackers.cf import ops
 from edgecv.trackers.cf.base import CorrelationFilterTracker, EvalResult, FilterState
 
@@ -111,6 +112,9 @@ def _subpixel_peak(response: np.ndarray) -> tuple[float, float]:
 
 
 class Mosse(CorrelationFilterTracker):
+    default_calibrator = LinearCalibrator(low=3.0, high=15.0)
+
+
     def __init__(
         self,
         *,

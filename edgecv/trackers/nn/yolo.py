@@ -12,6 +12,7 @@ import numpy as np
 
 from edgecv.core.bbox import BoundingBox, PixelBox
 from edgecv.core.result import TrackResult, TrackStatus
+from edgecv.fusion.calibrator import SigmoidCalibrator
 from edgecv.fusion.policy import DetectorOutput
 from edgecv.trackers.nn.base import (
     UNSET,
@@ -29,6 +30,9 @@ from edgecv.trackers.nn.preprocess import (
 
 
 class YoloDetector:
+    default_calibrator = SigmoidCalibrator(centre=0.4, steepness=12.0)
+
+
     """Boxes in the returned DetectorOutput are (N,4) normalised xywh top-left,
     normalised to the image passed to detect()."""
 
@@ -77,6 +81,11 @@ class YoloDetector:
                                   scores=np.empty((0,), np.float32))
         # centre xywh (letterbox px) -> xyxy (letterbox px)
         cxs, cys, ws, hs = xywh[:, 0], xywh[:, 1], xywh[:, 2], xywh[:, 3]
+        # YOLO outputs raw unbounded [cx,cy,w,h] — w/h can be negative from
+        # model noise. Clamp to zero before xyxy conversion to prevent
+        # degenerate boxes propagating through the pipeline.
+        ws = np.maximum(ws, 0.0)
+        hs = np.maximum(hs, 0.0)
         xyxy = np.stack([cxs - ws / 2, cys - hs / 2, cxs + ws / 2, cys + hs / 2], axis=1)
         kept = class_agnostic_nms(xyxy, score, self._iou)
         xyxy, score = xyxy[kept], score[kept]
@@ -94,9 +103,10 @@ class YoloDetector:
 
 class YoloTracker(NNTracker):
     def __init__(self, manifest=None, *, backend="auto", model=None,
-                 search_factor=3.0, assoc_sigma=0.5, conf_thresh=UNSET,
-                 iou_thresh=UNSET, max_misses=5, input_size=UNSET,
-                 color=UNSET, scale=UNSET, output_format=UNSET) -> None:
+                 search_factor=2.0, assoc_sigma=0.5, assoc_threshold=0.1,
+                 conf_thresh=UNSET, iou_thresh=UNSET, max_misses=5,
+                 input_size=UNSET, color=UNSET, scale=UNSET,
+                 output_format=UNSET) -> None:
         super().__init__(manifest, backend=backend, model=model)
         pp = self._preprocessing
         input_size = resolve_pp(input_size, pp, "input", 640)
@@ -110,9 +120,11 @@ class YoloTracker(NNTracker):
             output_format=output_format, conf_thresh=conf_thresh, iou_thresh=iou_thresh)
         self._search_factor = search_factor
         self._assoc_sigma = assoc_sigma
+        self._assoc_threshold = assoc_threshold
         self._max_misses = max_misses
         self._input_size = input_size
         self._box: BoundingBox | None = None
+        self._init_box: BoundingBox | None = None  # frozen at init for stable sigma
         self._misses = 0
 
     def name(self) -> str:
@@ -120,6 +132,7 @@ class YoloTracker(NNTracker):
 
     def init(self, frame: np.ndarray, bbox: BoundingBox) -> None:
         self._box = bbox
+        self._init_box = bbox  # frozen for stable sigma reference
         self._status = TrackStatus.LOCKED
         self._misses = 0
         self._seq = 0
@@ -135,7 +148,9 @@ class YoloTracker(NNTracker):
         det = self._detector.detect(crop)
 
         best, best_w = None, -1.0
-        sigma = self._assoc_sigma * max(pix.w, pix.h) + 1e-6
+        # Use init box size for sigma — stable, not affected by detection drift.
+        init_pix = self._init_box.to_pixels(w_img, h_img)
+        sigma = self._assoc_sigma * max(init_pix.w, init_pix.h) + 1e-6
         for box_n, sc in zip(det.boxes, det.scores, strict=False):
             # crop-normalised xywh -> crop-out px -> frame px via xf.to_frame.
             # to_frame treats indices as pixel centres, so corners carry a
@@ -150,7 +165,8 @@ class YoloTracker(NNTracker):
             if w > best_w:
                 best_w, best = w, (fx1, fy1, fx2 - fx1, fy2 - fy1, float(sc))
 
-        if best is None:
+        # Require minimum association weight — reject weak/distant detections
+        if best is None or best_w < self._assoc_threshold:
             self._misses += 1
             self._status = TrackStatus.LOST if self._misses > self._max_misses \
                 else TrackStatus.COASTING
@@ -163,5 +179,5 @@ class YoloTracker(NNTracker):
         self._misses = 0
         self._status = TrackStatus.LOCKED
         self._seq += 1
-        return TrackResult(bbox=self._box, confidence=score, status=self._status,
+        return TrackResult(bbox=self._box, confidence=best_w, status=self._status,
                            timestamp=time.monotonic(), seq=self._seq)
