@@ -49,7 +49,13 @@ def rknn_convert(onnx_path: str, out_path: str, target: str,
     rknn.config(mean_values=[[0, 0, 0]] * len(input_names),
                 std_values=[[1, 1, 1]] * len(input_names),
                 target_platform=target)
-    if rknn.load_onnx(model=onnx_path, inputs=input_names) != 0:
+    # Don't pass `inputs` here: rknn-toolkit2 (>=2.x) requires `input_size_list`
+    # alongside `inputs` and otherwise raises "If 'inputs' set, the
+    # 'input_size_list' should be set also!". `inputs` is only needed to crop the
+    # graph, which this generic converter never does — so let load_onnx read the
+    # input names/shapes from the ONNX itself. `input_names` is still used above to
+    # size the per-input mean/std lists.
+    if rknn.load_onnx(model=onnx_path) != 0:
         raise RuntimeError(f"load_onnx failed for {onnx_path!r}")
     dataset = _write_dataset_file(calibration_dir) if quantize else None
     if rknn.build(do_quantization=quantize, dataset=dataset) != 0:

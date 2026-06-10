@@ -1,9 +1,21 @@
+import importlib.util
+
 import numpy as np
 import pytest
 
 from edgecv.backends.rknn import RknnBackend
 
 ort = pytest.importorskip("onnxruntime")
+
+# The two "without_runtime" tests below assert the off-device behaviour (x86/CI
+# with no rknn-toolkit-lite2). On a real Rockchip device the runtime IS present,
+# so those assertions are inverted — skip them there rather than report a
+# spurious failure.
+_rknn_runtime_present = importlib.util.find_spec("rknnlite") is not None
+_skip_on_device = pytest.mark.skipif(
+    _rknn_runtime_present,
+    reason="rknn-toolkit-lite2 is installed (on-device); these assert the off-device path",
+)
 
 
 def _make_identity_onnx(path):
@@ -38,11 +50,13 @@ def test_onnx_backend_loads_and_infers(tmp_path):
     model.close()
 
 
+@_skip_on_device
 def test_rknn_backend_reports_unavailable_without_runtime():
     # On x86/CI there is no rknnlite; the adapter must say so, not crash.
     assert RknnBackend().is_available() is False
 
 
+@_skip_on_device
 def test_rknn_load_raises_clear_error_without_runtime():
     from edgecv.models.manifest import ModelManifest
 
