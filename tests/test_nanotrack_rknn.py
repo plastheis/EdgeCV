@@ -79,7 +79,7 @@ def test_from_manifest_loads_rknn_artifact_paths():
     NanoTrack.from_manifest(MANIFEST, backend="rknn", backend_obj=be)
     paths = sorted(m.artifacts["rknn"]["path"] for m in be.loaded)
     assert [Path(p).name for p in paths] == [
-        "nanotrack_backbone.rknn",
+        "nanotrack_backbone_antiuav.rknn",
         "nanotrack_head.rknn",
     ]
 

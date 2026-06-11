@@ -17,4 +17,12 @@ runs/
 
 # model weight blobs (host-only; deferred, not committed)
 *.onnx
-/models/
+# Ignore models/ contents (not the dir itself, so the negations below can descend
+# into it) except the committed per-SoC nanotrack quant blobs. Re-include each
+# dir, then its files — a file can't be un-ignored while its parent dir is
+# excluded, and the *.rknn rule above still needs an explicit override.
+/models/*
+!/models/nanotrack_quant_rk3588/
+!/models/nanotrack_quant_rk3588/*.rknn
+!/models/nanotrack_quant_rk3566/
+!/models/nanotrack_quant_rk3566/*.rknn

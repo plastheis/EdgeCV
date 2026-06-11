@@ -14,7 +14,7 @@ from edgecv.backends.base import (
     TensorSpec,
 )
 from edgecv.models.manifest import ModelManifest
-from edgecv.models.paths import resolve_artifact_path
+from edgecv.models.paths import apply_rknn_target, resolve_artifact_path
 
 _INSTALL_HINT = (
     "rknn-toolkit-lite2 is not available. It is not on PyPI; install it manually "
@@ -101,7 +101,9 @@ class RknnBackend(InferenceBackend):
         if not artifact or "path" not in artifact:
             raise ValueError(f"manifest {manifest.name!r} has no rknn artifact path")
         rknn = rknn_lite()
-        resolved = resolve_artifact_path(artifact["path"])
+        # rknn blobs are per-SoC: fill the path's {target} token (if any) with the
+        # active compile target before resolving against the model dir.
+        resolved = resolve_artifact_path(apply_rknn_target(artifact["path"]))
         if rknn.load_rknn(resolved) != 0:
             raise RuntimeError(f"failed to load rknn model {resolved!r}")
         core_mask = artifact.get("npu_core") or 0

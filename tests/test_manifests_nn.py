@@ -44,7 +44,9 @@ def test_nanotrack_manifest_loads():
     # Split two-model artifacts: each half carries per-backend paths + its own io.
     bb, hd = m.artifacts["backbone"], m.artifacts["head"]
     assert bb["onnx"]["path"] == "nanotrack_backbone.onnx"
-    assert bb["rknn"]["path"] == "nanotrack_backbone.rknn"
+    assert bb["rknn"]["path"] == "nanotrack_quant_{target}/nanotrack_backbone_antiuav.rknn"
+    assert bb["rknn"]["quant"] == "int8"
     assert hd["onnx"]["path"] == "nanotrack_head.onnx"
-    assert hd["rknn"]["path"] == "nanotrack_head.rknn"
+    assert hd["rknn"]["path"] == "nanotrack_quant_{target}/nanotrack_head.rknn"
+    assert hd["rknn"]["quant"] == "fp16"
     assert [o["name"] for o in hd["io"]["outputs"]] == ["output1", "output2"]
