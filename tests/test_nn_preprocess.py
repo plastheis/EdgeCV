@@ -48,6 +48,68 @@ def test_crop_xform_to_frame_roundtrip():
     assert fy == pytest.approx(30.0, abs=1e-6)
 
 
+# ── cv2 fast-path parity with the numpy reference (spec 2026-06-14) ───────────
+from edgecv.trackers.nn import preprocess as _pp  # noqa: E402
+
+_CV2_CASES = [
+    ((60.0, 50.0), (40.0, 40.0), (48, 48)),     # centred, upscaled
+    ((30.0, 80.0), (50.0, 30.0), (32, 64)),     # off-centre, non-square aspect
+    ((5.0, 5.0), (40.0, 40.0), (40, 40)),       # window overruns the top-left border
+    ((118.0, 95.0), (30.0, 30.0), (24, 24)),    # window overruns the bottom-right
+]
+
+
+def _gradient_frame():
+    h, w = 100, 120
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    chans = [xx * 2.0, yy * 2.0, (xx + yy)]
+    return np.clip(np.stack(chans, axis=-1), 0, 255).astype(np.uint8)
+
+
+@pytest.mark.skipif(_pp._cv2 is None, reason="cv2 not installed")
+@pytest.mark.parametrize("center,size,out", _CV2_CASES)
+def test_crop_resize_cv2_matches_numpy(center, size, out):
+    frame = _gradient_frame()
+    fast = _pp._crop_resize(frame, center, size, out)
+    ref = _pp._crop_resize_numpy(frame, center, size, out)
+    assert fast.shape == ref.shape
+    assert fast.dtype == np.float32
+    # interpolation rounding only — both share the same half-pixel grid.
+    assert np.max(np.abs(fast - ref)) <= 1.0
+
+
+@pytest.mark.skipif(_pp._cv2 is None, reason="cv2 not installed")
+def test_crop_resize_cv2_grayscale_parity():
+    frame = _gradient_frame()[..., 0]  # 2-D
+    fast = _pp._crop_resize(frame, (40.0, 40.0), (30.0, 30.0), (32, 32))
+    ref = _pp._crop_resize_numpy(frame, (40.0, 40.0), (30.0, 30.0), (32, 32))
+    assert fast.shape == (32, 32) == ref.shape
+    assert np.max(np.abs(fast - ref)) <= 1.0
+
+
+@pytest.mark.skipif(_pp._cv2 is None, reason="cv2 not installed")
+def test_crop_with_context_inversion_invariant_across_backends():
+    """CropXform inversion must be identical whichever sampler produced the patch."""
+    frame = _gradient_frame()
+    center, size, out = (60.0, 50.0), (40.0, 40.0), (48, 48)
+    _, xf_fast = crop_with_context(frame, center, size, out)
+    # Same xform regardless of backend — pin the spec invariant on a few pixels.
+    for ox, oy in [(0.0, 0.0), (23.5, 23.5), (47.0, 12.0)]:
+        fx = (center[0] - size[1] / 2.0) + (ox + 0.5) / out[1] * size[1]
+        fy = (center[1] - size[0] / 2.0) + (oy + 0.5) / out[0] * size[0]
+        assert xf_fast.to_frame((ox, oy)) == pytest.approx((fx, fy), abs=1e-6)
+
+
+def test_crop_with_context_numpy_fallback(monkeypatch):
+    """With cv2 forced absent, crop_with_context still returns a float32 patch."""
+    monkeypatch.setattr(_pp, "_cv2", None)
+    frame = _gradient_frame()
+    patch, xf = crop_with_context(frame, (60.0, 50.0), (40.0, 40.0), (40, 40))
+    assert patch.shape == (40, 40, 3)
+    assert patch.dtype == np.float32
+    assert np.isfinite(patch).all()
+
+
 def test_letterbox_preserves_aspect_and_pads():
     img = np.zeros((50, 100, 3), np.uint8)  # 2:1 wide
     out, xf = letterbox(img, (64, 64), pad_value=114)

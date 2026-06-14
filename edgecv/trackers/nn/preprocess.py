@@ -13,6 +13,11 @@ import numpy as np
 
 from edgecv.backends.base import TensorSpec
 
+try:  # optional accelerator: cv2 SIMD crop+resize (~50-100x the numpy gather).
+    import cv2 as _cv2  # QuadGuide hard dep / EdgeCV `fast` extra; absent in CI.
+except Exception:  # pragma: no cover - exercised by the numpy-fallback path
+    _cv2 = None
+
 
 def _sample_clamped(img: np.ndarray, gx: np.ndarray, gy: np.ndarray) -> np.ndarray:
     """Bilinear sample at float (gx, gy) frame coords; clamp = edge-replicate."""
@@ -94,14 +99,13 @@ def letterbox(
     return out, LetterboxXform(s, (float(x0), float(y0)), (oh, ow), (h, w))
 
 
-def crop_with_context(
+def _crop_resize_numpy(
     frame: np.ndarray,
     center: tuple[float, float],
     size_px: tuple[float, float],
     out_size: tuple[int, int],
-) -> tuple[np.ndarray, CropXform]:
-    """Crop a (sh, sw)-px window centred at `center`, edge-replicate at borders,
-    resize to out_size in one gather. Returns the patch and the inversion transform."""
+) -> np.ndarray:
+    """Reference edge-replicate bilinear crop+resize via a numpy gather."""
     cx, cy = center
     sh, sw = size_px
     oh, ow = out_size
@@ -111,6 +115,58 @@ def crop_with_context(
     patch = _sample_clamped(frame, gx, gy)
     if frame.ndim == 2:
         patch = patch.reshape(oh, ow)
+    return patch
+
+
+def _crop_resize(
+    frame: np.ndarray,
+    center: tuple[float, float],
+    size_px: tuple[float, float],
+    out_size: tuple[int, int],
+) -> np.ndarray:
+    """Edge-replicate bilinear crop+resize. cv2 fast path, numpy fallback.
+
+    Both honour the SAME half-pixel sampling grid as `_crop_resize_numpy` — output
+    pixel (ox, oy) samples frame coord ((cx-sw/2) + (ox+0.5)/ow*sw, …) — so the
+    `CropXform` inversion (and every downstream box decode) is identical either way.
+    """
+    if _cv2 is None:
+        return _crop_resize_numpy(frame, center, size_px, out_size)
+    cx, cy = center
+    sh, sw = size_px
+    oh, ow = out_size
+    # Separable affine mapping dst pixel -> src (frame) coord, matching the numpy
+    # grid: src_x = a*ox + b with a = sw/ow, b = (cx-sw/2) + 0.5*a (the +0.5 is the
+    # half-pixel centre offset — dropping it shifts the crop by half a sample).
+    a = sw / ow
+    c = sh / oh
+    M = np.array(
+        [[a, 0.0, (cx - sw / 2.0) + 0.5 * a],
+         [0.0, c, (cy - sh / 2.0) + 0.5 * c]],
+        np.float32,
+    )
+    patch = _cv2.warpAffine(
+        frame, M, (ow, oh),
+        flags=_cv2.INTER_LINEAR | _cv2.WARP_INVERSE_MAP,
+        borderMode=_cv2.BORDER_REPLICATE,
+    )
+    return patch.astype(np.float32, copy=False)
+
+
+def crop_with_context(
+    frame: np.ndarray,
+    center: tuple[float, float],
+    size_px: tuple[float, float],
+    out_size: tuple[int, int],
+) -> tuple[np.ndarray, CropXform]:
+    """Crop a (sh, sw)-px window centred at `center`, edge-replicate at borders,
+    resize to out_size in one gather. Returns the patch and the inversion transform.
+
+    Uses a cv2 SIMD crop+resize when available, falling back to a numpy gather;
+    both share the half-pixel grid that `CropXform` inverts (ARCHITECTURE §6.2/§16)."""
+    sh, sw = size_px
+    oh, ow = out_size
+    patch = _crop_resize(frame, center, size_px, out_size)
     return patch, CropXform(center, (sh, sw), (oh, ow))
 
 
