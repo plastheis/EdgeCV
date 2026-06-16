@@ -37,14 +37,31 @@ def _sample_clamped(img: np.ndarray, gx: np.ndarray, gy: np.ndarray) -> np.ndarr
     return (top * (1.0 - wy) + bot * wy).astype(np.float32)
 
 
-def resize_bilinear(img: np.ndarray, out_hw: tuple[int, int]) -> np.ndarray:
-    """Resize (H,W[,C]) to out_hw with centre-aligned bilinear sampling."""
+def _resize_bilinear_numpy(img: np.ndarray, out_hw: tuple[int, int]) -> np.ndarray:
+    """Reference centre-aligned bilinear resize via a numpy gather."""
     oh, ow = out_hw
     h, w = img.shape[0], img.shape[1]
     xs = (np.arange(ow) + 0.5) * (w / ow) - 0.5
     ys = (np.arange(oh) + 0.5) * (h / oh) - 0.5
     gx, gy = np.meshgrid(xs, ys)
     return _sample_clamped(np.asarray(img, dtype=np.float32), gx, gy)
+
+
+def resize_bilinear(img: np.ndarray, out_hw: tuple[int, int]) -> np.ndarray:
+    """Resize (H,W[,C]) to out_hw with centre-aligned bilinear sampling.
+
+    cv2 SIMD fast path (dominates the YOLO letterbox cost — ~80 ms → a few ms on
+    a 640² resize), numpy reference fallback. cv2's INTER_LINEAR uses the SAME
+    half-pixel grid (``src = (dst+0.5)*scale - 0.5``) and edge-replicate borders as
+    the reference, so the LetterboxXform inversion is identical either way."""
+    oh, ow = out_hw
+    if _cv2 is None:
+        return _resize_bilinear_numpy(img, out_hw)
+    src = np.asarray(img, dtype=np.float32)
+    out = _cv2.resize(src, (ow, oh), interpolation=_cv2.INTER_LINEAR)
+    if src.ndim == 3 and out.ndim == 2:   # cv2 drops a trailing length-1 channel
+        out = out[..., None]
+    return np.ascontiguousarray(out, dtype=np.float32)
 
 
 @dataclass(frozen=True)
@@ -208,6 +225,54 @@ def points_grid(stride: int, size: int) -> np.ndarray:
     coords = (ori + stride * np.arange(size)).astype(np.float32)
     gx, gy = np.meshgrid(coords, coords)          # gx[r,c]=coords[c], gy[r,c]=coords[r]
     return np.stack([gx.reshape(-1), gy.reshape(-1)], axis=0)
+
+
+def decode_yolo_dfl(outputs, strides, *, reg_max: int = 16,
+                    conf_thresh: float = 0.25):
+    """Decode the rknn_model_zoo-style separated YOLOv8/11 head.
+
+    ``outputs`` is the list of per-scale head tensors in compiled order, grouped
+    per stride: each group is ``[box_reg (1, 4*reg_max, H, W), cls (1, nc, H, W),
+    ...]`` — a trailing score-sum tensor (if present) is ignored. ``cls`` is taken
+    as already sigmoid-activated (probabilities). Returns ``(xyxy_px, scores)`` in
+    input-letterbox pixels; the caller inverts the letterbox to original coords.
+
+    Anchor-free DFL: the 64-channel box output is ``(4, reg_max)`` per cell;
+    softmax over the bins, expectation → l/t/r/b distances (in cells), projected
+    from the cell centre ``(col+0.5, row+0.5)`` and scaled by ``stride``.
+    """
+    per_scale = max(1, len(outputs) // len(strides))
+    bins = np.arange(reg_max, dtype=np.float32)
+    all_xyxy, all_score = [], []
+    for s, stride in enumerate(strides):
+        reg = np.asarray(outputs[s * per_scale + 0], np.float32)[0]   # (4*reg_max,H,W)
+        cls = np.asarray(outputs[s * per_scale + 1], np.float32)[0]   # (nc,H,W)
+        _, H, W = reg.shape
+        # Threshold on score FIRST, then DFL-decode only the surviving cells —
+        # the high-res P2 grid (160²) has thousands of cells but few detections,
+        # so the per-cell softmax should run on the kept handful, not all of them.
+        score = cls.max(axis=0).reshape(-1)                           # (H*W,) class-agnostic
+        idx = np.nonzero(score >= conf_thresh)[0]
+        if idx.size == 0:
+            continue
+        sc = score[idx]
+        reg = reg.reshape(4, reg_max, H * W)[:, :, idx]               # (4,reg_max,K)
+        reg = reg - reg.max(axis=1, keepdims=True)
+        e = np.exp(reg)
+        dist = ((e / e.sum(axis=1, keepdims=True))
+                * bins[None, :, None]).sum(axis=1)                    # (4,K) l,t,r,b
+        col = (idx % W).astype(np.float32) + 0.5                      # cell centre x
+        row = (idx // W).astype(np.float32) + 0.5                     # cell centre y
+        x1 = (col - dist[0]) * stride
+        y1 = (row - dist[1]) * stride
+        x2 = (col + dist[2]) * stride
+        y2 = (row + dist[3]) * stride
+        all_xyxy.append(np.stack([x1, y1, x2, y2], axis=1))
+        all_score.append(sc)
+    if all_xyxy:
+        return (np.concatenate(all_xyxy, 0).astype(np.float32),
+                np.concatenate(all_score, 0).astype(np.float32))
+    return np.empty((0, 4), np.float32), np.empty((0,), np.float32)
 
 
 def class_agnostic_nms(boxes_xyxy: np.ndarray, scores: np.ndarray,

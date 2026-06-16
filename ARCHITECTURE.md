@@ -327,6 +327,21 @@ payloads carry `seq`. Bridging the gap to the current position is the predictor'
 reference hybrid (MAFiD-style) is documented in its own spec; this library provides the runtime,
 the CF contract, the fusion abstractions, and the predictor hook it needs.
 
+**Not every hybrid is CF+detector fusion.** `AcquireTrack`
+(`trackers/hybrid/acquire_track.py`; spec `docs/superpowers/specs/2026-06-14-acquire-track-design.md`)
+is an **NN→NN handoff**: a YOLO detector acquires a target on a fixed central crop, an operator
+init command locks NanoTrack onto the current best detection, and on confidence drop YOLO
+re-acquires (crop → full frame) and re-locks. The two NN models are **mutually exclusive** (only one
+infers at a time) and run in their own spawned workers, each pinned to its own NPU core via the
+manifest `npu_core` (`backends/rknn` reads it into `init_runtime(core_mask)`). It reuses the §7
+primitives — `Orchestrator`, `FrameRing`, seqlock channels — but defines its own thin contract
+rather than the CF one: a parent→workers control channel
+(`runtime/shm/control_channel.py`: mode + crop + `lock_gen` + lock bbox), a YOLO `PayloadChannel`,
+and a single-box NanoTrack result channel (`runtime/shm/nano_result.py`). No `FilterState`,
+`build_filter`/`evaluate`, or `FusionPolicy`. The state machine runs inline in `update()`; workers
+free-run and infer only when their control `mode` is active. It still honours the §14 invariants
+(spawn-only, single-writer seqlock, ABI discipline, source-`seq`/`timestamp` lineage).
+
 ---
 
 ## 7. Runtime and IPC (`edgecv/runtime/`)

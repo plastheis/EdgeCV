@@ -12,7 +12,9 @@ import ctypes
 import numpy as np
 
 MAGIC = 0xED6EC711          # "edgecv" tag; arbitrary but fixed
-ABI_VERSION = 2
+# v3: added AcquireControl + NanoResult for the AcquireTrack hybrid
+# (docs/superpowers/specs/2026-06-14-acquire-track-design.md §3.2).
+ABI_VERSION = 3
 
 # numpy dtype <-> stable integer code. Append-only; never renumber.
 _CODE_TO_NAME: dict[int, str] = {
@@ -81,6 +83,60 @@ class SearchROIControl(ctypes.Structure):
         ("w", ctypes.c_double),
         ("h", ctypes.c_double),
         ("timestamp", ctypes.c_double),
+    ]
+
+
+class AcquireControl(ctypes.Structure):
+    """Control word for the AcquireTrack control channel (parent → both workers).
+
+    Carries the active worker selector (`mode`), the normalised crop region fed
+    to YOLO, and a monotone `lock_gen` + `lock_bbox` the NanoTrack worker watches
+    to (re-)initialise its template. Single writer (the parent), wait-free reads.
+    Fields are ordered widest-first so the layout is naturally 8-aligned.
+    """
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("seq", ctypes.c_uint64),
+        ("seqlock", ctypes.c_uint64),
+        ("lock_gen", ctypes.c_uint64),
+        ("mode", ctypes.c_uint32),        # 0=IDLE, 1=YOLO, 2=NANO
+        ("_pad", ctypes.c_uint32),
+        ("cx", ctypes.c_double),          # crop region, normalised xywh top-left
+        ("cy", ctypes.c_double),
+        ("cw", ctypes.c_double),
+        ("ch", ctypes.c_double),
+        ("lx", ctypes.c_double),          # lock bbox, normalised xywh top-left
+        ("ly", ctypes.c_double),
+        ("lw", ctypes.c_double),
+        ("lh", ctypes.c_double),
+        ("timestamp", ctypes.c_double),
+    ]
+
+
+class NanoResult(ctypes.Structure):
+    """Result word for the NanoTrack worker → parent channel.
+
+    Always one bounding box (NanoTrack is single-object), plus its confidence,
+    status, and the source frame's seq/timestamp so the parent can stamp the
+    correct latency lineage (§4). Single writer (the NanoTrack worker).
+    """
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("seq", ctypes.c_uint64),
+        ("seqlock", ctypes.c_uint64),
+        ("src_seq", ctypes.c_uint64),
+        ("status", ctypes.c_uint32),      # TrackStatus int value
+        ("_pad", ctypes.c_uint32),
+        ("x", ctypes.c_double),
+        ("y", ctypes.c_double),
+        ("w", ctypes.c_double),
+        ("h", ctypes.c_double),
+        ("confidence", ctypes.c_double),
+        ("src_ts", ctypes.c_double),
     ]
 
 

@@ -6,13 +6,18 @@ concrete MAFiD reference hybrids have been removed; these pieces remain for a
 future hybrid to build on.
 """
 
+from edgecv.trackers.hybrid.acquire_track import AcquireTrack, State
 from edgecv.trackers.hybrid.detector_adapter import (
     NanoTrackDetectorAdapter,
     NNDetectorAdapter,
     YoloDetectorAdapter,
 )
+from edgecv.trackers.hybrid.verified_acquire_track import VerifiedAcquireTrack
 
 __all__ = [
+    "AcquireTrack",
+    "VerifiedAcquireTrack",
+    "State",
     "NNDetectorAdapter",
     "NanoTrackDetectorAdapter",
     "YoloDetectorAdapter",

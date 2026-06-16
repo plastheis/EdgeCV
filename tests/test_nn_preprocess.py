@@ -23,6 +23,20 @@ def test_resize_bilinear_changes_shape_keeps_channels():
     assert out.shape == (8, 16, 3)
 
 
+def test_resize_bilinear_cv2_matches_numpy(monkeypatch):
+    """cv2 fast path and numpy reference agree (same half-pixel grid)."""
+    import edgecv.trackers.nn.preprocess as pp
+    if pp._cv2 is None:
+        pytest.skip("cv2 not installed")
+    img = (np.random.default_rng(1).random((37, 53, 3)) * 255).astype(np.float32)
+    cv2_out = pp.resize_bilinear(img, (64, 96))           # uses cv2
+    monkeypatch.setattr(pp, "_cv2", None)
+    numpy_out = pp.resize_bilinear(img, (64, 96))         # forces numpy
+    assert cv2_out.shape == numpy_out.shape == (64, 96, 3)
+    # Same sampling formula → close; allow small interpolation-weight differences.
+    assert np.abs(cv2_out - numpy_out).mean() < 1.0
+
+
 def test_crop_with_context_centre_and_shape():
     frame = np.zeros((100, 120, 3), np.uint8)
     frame[48:52, 58:62] = 200  # bright square at centre (~ (60, 50))

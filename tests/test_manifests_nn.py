@@ -33,6 +33,32 @@ def test_yolo_generic_is_retired():
     assert not (MANIFESTS / "yolo_generic.yaml").exists()
 
 
+def test_yolo11n_manifest_loads():
+    m = load_manifest(MANIFESTS / "yolo11n.yaml")
+    assert m.name == "yolo11n"
+    assert m.task == "detection"
+    assert m.preprocessing["class_agnostic"] is True
+    # rknn_model_zoo separated P2/P3/P4 head, decoded by decode_yolo_dfl.
+    assert m.preprocessing["output_format"] == "rknn_dfl"
+    assert m.preprocessing["strides"] == [4, 8, 16]
+    assert m.preprocessing["reg_max"] == 16
+    assert m.preprocessing["scale"] == 1.0   # raw 0-255 (norm baked into the rknn)
+    # 9 outputs: 3 scales × {box, cls, score_sum}; first is the P2 box DFL tensor.
+    assert len(m.outputs) == 9
+    assert m.outputs[0]["shape"] == [1, 64, 160, 160]
+    # YOLO gets its own NPU core (AcquireTrack two-core placement).
+    assert m.artifacts["rknn"]["npu_core"] == 1
+    assert m.artifacts["rknn"]["path"] == "yolo11n_p2p3p4_{target}_i8.rknn"
+    assert m.artifacts["rknn"]["quant"] == "int8"
+
+
+def test_nanotrack_has_npu_core():
+    m = load_manifest(MANIFESTS / "nanotrack.yaml")
+    # Both split halves pinned to the NanoTrack NPU core (head shares the backbone's).
+    assert m.artifacts["backbone"]["rknn"]["npu_core"] == 2
+    assert m.artifacts["head"]["rknn"]["npu_core"] == 2
+
+
 def test_nanotrack_manifest_loads():
     m = load_manifest(MANIFESTS / "nanotrack.yaml")
     assert m.name == "nanotrack"

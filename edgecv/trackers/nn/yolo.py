@@ -24,6 +24,7 @@ from edgecv.trackers.nn.base import (
 from edgecv.trackers.nn.preprocess import (
     class_agnostic_nms,
     crop_with_context,
+    decode_yolo_dfl,
     letterbox,
     to_input,
 )
@@ -38,7 +39,8 @@ class YoloDetector:
 
     def __init__(self, manifest=None, *, backend="auto", model=None,
                  input_size=UNSET, color=UNSET, scale=UNSET,
-                 output_format=UNSET, conf_thresh=UNSET, iou_thresh=UNSET) -> None:
+                 output_format=UNSET, conf_thresh=UNSET, iou_thresh=UNSET,
+                 strides=UNSET, reg_max=UNSET) -> None:
         self._owns_model = model is None
         self._model = resolve_model(manifest, backend, model)
         pp = manifest_preprocessing(manifest)   # {} when a model= is injected
@@ -48,6 +50,9 @@ class YoloDetector:
         self._output_format = resolve_pp(output_format, pp, "output_format", "yolov8")
         self._conf = resolve_pp(conf_thresh, pp, "conf_thresh", 0.25)
         self._iou = resolve_pp(iou_thresh, pp, "iou_thresh", 0.45)
+        # rknn_dfl (separated per-scale head) extras; ignored by the fused formats.
+        self._strides = tuple(resolve_pp(strides, pp, "strides", (8, 16, 32)))
+        self._reg_max = resolve_pp(reg_max, pp, "reg_max", 16)
         self._spec = self._model.io_spec.inputs[0]
         self._out_name = self._model.io_spec.outputs[0].name
 
@@ -56,13 +61,33 @@ class YoloDetector:
         n = self._input_size
         lb, xf = letterbox(image, (n, n))
         inp = to_input(lb, self._spec, color=self._color, scale=self._scale)
-        raw = np.asarray(self._model.infer({self._spec.name: inp})[self._out_name], np.float32)
+        out = self._model.infer({self._spec.name: inp})
+        if self._output_format == "rknn_dfl":
+            outputs = [np.asarray(out[o.name]) for o in self._model.io_spec.outputs]
+            xyxy, score = decode_yolo_dfl(outputs, self._strides,
+                                          reg_max=self._reg_max, conf_thresh=self._conf)
+        else:
+            xyxy, score = self._decode_fused(
+                np.asarray(out[self._out_name], np.float32))
+        if len(score) == 0:
+            return DetectorOutput(boxes=np.empty((0, 4), np.float32),
+                                  scores=np.empty((0,), np.float32))
+        kept = class_agnostic_nms(xyxy, score, self._iou)
+        xyxy, score = xyxy[kept], score[kept]
+        # invert letterbox -> original px -> normalised xywh top-left
+        boxes = np.empty((len(kept), 4), np.float32)
+        for i, b in enumerate(xyxy):
+            ox1, oy1, ox2, oy2 = xf.to_orig_xyxy((b[0], b[1], b[2], b[3]))
+            boxes[i] = [ox1 / w_img, oy1 / h_img, (ox2 - ox1) / w_img, (oy2 - oy1) / h_img]
+        return DetectorOutput(boxes=boxes, scores=score.astype(np.float32))
+
+    def _decode_fused(self, raw: np.ndarray):
+        """Decode a single fused head tensor → (xyxy_px, score) before NMS."""
         # v8/v26 one-to-many head is (1, 4+nc, N) channels-first -> transpose to rows;
         # v5/"decoded" are already (1, N, k).
         preds = raw[0].T if self._output_format == "yolov8" else raw[0]
         if preds.shape[0] == 0:
-            return DetectorOutput(boxes=np.empty((0, 4), np.float32),
-                                  scores=np.empty((0,), np.float32))
+            return np.empty((0, 4), np.float32), np.empty((0,), np.float32)
         if self._output_format == "yolov5":
             # yolov5 row layout: [cx, cy, w, h | obj | cls_0..cls_{nc-1}]
             xywh, obj, cls = preds[:, :4], preds[:, 4], preds[:, 5:]
@@ -77,24 +102,14 @@ class YoloDetector:
         keep = score >= self._conf
         xywh, score = xywh[keep], score[keep]
         if len(score) == 0:
-            return DetectorOutput(boxes=np.empty((0, 4), np.float32),
-                                  scores=np.empty((0,), np.float32))
-        # centre xywh (letterbox px) -> xyxy (letterbox px)
+            return np.empty((0, 4), np.float32), np.empty((0,), np.float32)
         cxs, cys, ws, hs = xywh[:, 0], xywh[:, 1], xywh[:, 2], xywh[:, 3]
-        # YOLO outputs raw unbounded [cx,cy,w,h] — w/h can be negative from
-        # model noise. Clamp to zero before xyxy conversion to prevent
-        # degenerate boxes propagating through the pipeline.
+        # YOLO outputs raw unbounded [cx,cy,w,h] — w/h can be negative from model
+        # noise. Clamp to zero before xyxy conversion to avoid degenerate boxes.
         ws = np.maximum(ws, 0.0)
         hs = np.maximum(hs, 0.0)
         xyxy = np.stack([cxs - ws / 2, cys - hs / 2, cxs + ws / 2, cys + hs / 2], axis=1)
-        kept = class_agnostic_nms(xyxy, score, self._iou)
-        xyxy, score = xyxy[kept], score[kept]
-        # invert letterbox -> original px -> normalised xywh top-left
-        boxes = np.empty((len(kept), 4), np.float32)
-        for i, b in enumerate(xyxy):
-            ox1, oy1, ox2, oy2 = xf.to_orig_xyxy((b[0], b[1], b[2], b[3]))
-            boxes[i] = [ox1 / w_img, oy1 / h_img, (ox2 - ox1) / w_img, (oy2 - oy1) / h_img]
-        return DetectorOutput(boxes=boxes, scores=score.astype(np.float32))
+        return xyxy, score
 
     def close(self) -> None:
         if self._owns_model:
