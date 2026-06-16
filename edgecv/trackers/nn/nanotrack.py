@@ -151,10 +151,15 @@ class NanoTrack(NNTracker):
         h_img, w_img = frame.shape[0], frame.shape[1]
         pix = bbox.to_pixels(w_img, h_img)
         s_z = self._exemplar_side(pix)
-
-        # Crop exemplar region, resize to model_input, feed through backbone,
-        # then centre-crop the 16x16 feature to 8x8 for the head.
-        patch, _ = crop_with_context(frame, pix.center, (s_z, s_z),
+        # Crop the SEARCH-sized window (s_x), not the exemplar window. The template
+        # is the centre 8x8 of the 16x16 feature (z_feat[..., 4:12, 4:12] below);
+        # that centre-crop only equals a true backbone(127 exemplar) when the 255
+        # input spans s_x = s_z * search/exemplar (the central 8/16 of an s_x window
+        # is exactly the s_z region at the right scale). Cropping s_z instead makes
+        # the template ~2x too zoomed-in, so the box collapses onto a central feature
+        # over successive frames. Must match the s_x used in update().
+        s_x = s_z * self._search_size / self._exemplar_size
+        patch, _ = crop_with_context(frame, pix.center, (s_x, s_x),
                                      (self._model_input, self._model_input))
         xf = to_input(patch, self._backbone.io_spec.inputs[0],
                       color=self._color, scale=self._scale)

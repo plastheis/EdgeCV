@@ -52,6 +52,27 @@ def test_init_builds_exemplar_feature_template():
     assert t.status == TrackStatus.LOCKED
 
 
+def test_init_crops_same_window_as_update(monkeypatch):
+    # Regression: the template is the centre 8x8 of the 16x16 backbone feature, so
+    # init() MUST crop the same search-sized window (s_x) that update() crops --
+    # otherwise the template is ~2x too zoomed-in and the box collapses onto a
+    # central feature over time. Spy on the crop side requested by each.
+    import edgecv.trackers.nn.nanotrack as nt
+
+    sides = []
+    real = nt.crop_with_context
+
+    def spy(frame, center, size_px, out_size):
+        sides.append(float(size_px[0]))
+        return real(frame, center, size_px, out_size)
+
+    monkeypatch.setattr(nt, "crop_with_context", spy)
+    t = _nano([_out(S // 2, S // 2)])
+    t.init(_frame(), _box())     # sides[0] = init crop side
+    t.update(_frame())           # sides[1] = update (search) crop side
+    assert sides[0] == pytest.approx(sides[1], rel=1e-6)
+
+
 def test_set_template_round_trips():
     t = _nano([_out(S // 2, S // 2)])
     t.init(_frame(), _box())
