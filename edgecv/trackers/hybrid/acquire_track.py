@@ -4,8 +4,9 @@ Spec: docs/superpowers/specs/2026-06-14-acquire-track-design.md
 
 A detector + NN-tracker handoff (not the CF-filter MAFiD fusion). YOLO acquires a
 target on a fixed central crop; on an operator init command NanoTrack locks onto
-the current best detection; on confidence drop YOLO re-acquires (crop → full
-frame) and re-locks. YOLO and NanoTrack run mutually-exclusive in their own
+the current best detection; on confidence drop YOLO re-acquires on the full frame
+and re-locks on the next confident detection. YOLO and NanoTrack run
+mutually-exclusive in their own
 spawned workers, each on its own NPU core. The state machine runs inline in
 ``update()``; workers free-run and infer only when their control ``mode`` is active.
 
@@ -15,7 +16,6 @@ existing adapter. All geometry is in normalised (0–1) coordinates.
 
 from __future__ import annotations
 
-import math
 import multiprocessing as mp
 import time
 from enum import Enum
@@ -37,8 +37,7 @@ _FULL_CROP = BoundingBox(0.0, 0.0, 1.0, 1.0)
 class State(Enum):
     ACQUIRE = "acquire"
     LOCKED = "locked"
-    REACQ_CROP = "reacq_crop"
-    REACQ_FULL = "reacq_full"
+    REACQ = "reacq"
     LOST = "lost"
 
 
@@ -54,9 +53,6 @@ class AcquireTrack(Tracker):
         lock_min_score: float = 0.35,
         drop_score: float = 0.35,
         drop_frames: int = 5,
-        reacq_crop_factor: float = 3.0,
-        reacq_crop_frames: int = 15,
-        reacq_assoc_sigma: float = 0.5,
         lost_timeout_frames: int = 90,
         search_timeout_frames: int = 300,
         yolo_kwargs: dict | None = None,
@@ -75,9 +71,6 @@ class AcquireTrack(Tracker):
         self._lock_min_score = lock_min_score
         self._drop_score = drop_score
         self._drop_frames = drop_frames
-        self._reacq_crop_factor = reacq_crop_factor
-        self._reacq_crop_frames = reacq_crop_frames
-        self._reacq_assoc_sigma = reacq_assoc_sigma
         self._lost_timeout_frames = lost_timeout_frames
         self._search_timeout_frames = search_timeout_frames
 
@@ -101,7 +94,6 @@ class AcquireTrack(Tracker):
         self._last_bbox: BoundingBox | None = None
         self._miss = 0
         self._coast_frames = 0
-        self._reacq_crop_count = 0
         self._lost_frames = 0
         self._last_yolo_seq = 0
         self._last_nano_src = 0
@@ -183,7 +175,6 @@ class AcquireTrack(Tracker):
         self._last_bbox = None
         self._miss = 0
         self._coast_frames = 0
-        self._reacq_crop_count = 0
         self._lost_frames = 0
         self._out = TrackResult(bbox=None, confidence=None,
                                 status=TrackStatus.INITIALIZING,
@@ -225,10 +216,8 @@ class AcquireTrack(Tracker):
             self._tick_acquire()
         elif self._state == State.LOCKED:
             self._tick_locked()
-        elif self._state == State.REACQ_CROP:
-            self._tick_reacq_crop()
-        elif self._state == State.REACQ_FULL:
-            self._tick_reacq_full()
+        elif self._state == State.REACQ:
+            self._tick_reacq()
         elif self._state == State.LOST:
             self._tick_lost()
 
@@ -256,7 +245,7 @@ class AcquireTrack(Tracker):
         if conf < self._drop_score:
             self._miss += 1
             if self._miss >= self._drop_frames:
-                self._enter_reacq_crop()
+                self._enter_reacq()
                 self._set_out(self._last_bbox, conf, TrackStatus.COASTING,
                               sample.src_seq, sample.src_ts)
                 return
@@ -267,18 +256,10 @@ class AcquireTrack(Tracker):
             self._set_out(bbox, conf, TrackStatus.LOCKED,
                           sample.src_seq, sample.src_ts)
 
-    def _tick_reacq_crop(self) -> None:
-        self._coast_frames += 1
-        self._reacq_crop_count += 1
-        if self._try_relock():
-            return
-        self._set_out(self._last_bbox, None, TrackStatus.COASTING)
-        if self._reacq_crop_count >= self._reacq_crop_frames:
-            self._enter_reacq_full()
-        elif self._coast_frames >= self._lost_timeout_frames:
-            self._enter_lost()
-
-    def _tick_reacq_full(self) -> None:
+    def _tick_reacq(self) -> None:
+        # Full-frame YOLO re-acquire: the next confident detection re-seeds
+        # NanoTrack; until then we coast on the last-known box. No new detection
+        # within lost_timeout_frames ⇒ LOST.
         self._coast_frames += 1
         if self._try_relock():
             return
@@ -302,19 +283,14 @@ class AcquireTrack(Tracker):
         self._lock_gen += 1
         self._miss = 0
         self._coast_frames = 0
-        self._reacq_crop_count = 0
         self._lost_frames = 0
         self._state = State.LOCKED
         self._set_out(self._lock_bbox, None, TrackStatus.LOCKED)
         self._publish_control()
 
-    def _enter_reacq_crop(self) -> None:
-        self._state = State.REACQ_CROP
+    def _enter_reacq(self) -> None:
+        self._state = State.REACQ
         self._coast_frames = 0
-        self._reacq_crop_count = 0
-
-    def _enter_reacq_full(self) -> None:
-        self._state = State.REACQ_FULL
 
     def _enter_lost(self) -> None:
         self._state = State.LOST
@@ -325,7 +301,7 @@ class AcquireTrack(Tracker):
         if res is None:
             return False
         _seq, boxes, scores, _src_seq, _src_ts = res
-        cand = self._associate(boxes, scores, self._last_bbox)
+        cand = self._best_above(boxes, scores)
         if cand is None:
             return False
         self._relock(cand)
@@ -360,10 +336,7 @@ class AcquireTrack(Tracker):
         elif self._state == State.ACQUIRE:
             self._control.publish(mode=Mode.YOLO, crop=self._central_crop(),
                                   lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
-        elif self._state == State.REACQ_CROP:
-            self._control.publish(mode=Mode.YOLO, crop=self._reacq_crop(),
-                                  lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
-        else:  # REACQ_FULL, LOST
+        else:  # REACQ, LOST — full-frame YOLO re-acquire
             self._control.publish(mode=Mode.YOLO, crop=_FULL_CROP,
                                   lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
 
@@ -380,17 +353,6 @@ class AcquireTrack(Tracker):
         side = self._acquire_crop * min(h, w)
         wn, hn = side / w, side / h
         return BoundingBox(x=(1.0 - wn) / 2.0, y=(1.0 - hn) / 2.0, w=wn, h=hn)
-
-    def _reacq_crop(self) -> BoundingBox:
-        if self._last_bbox is None:
-            return _FULL_CROP
-        b = self._last_bbox
-        cx, cy = b.x + b.w / 2.0, b.y + b.h / 2.0
-        side = self._reacq_crop_factor * max(b.w, b.h)
-        side = min(side, 1.0)
-        x = min(max(cx - side / 2.0, 0.0), 1.0 - side)
-        y = min(max(cy - side / 2.0, 0.0), 1.0 - side)
-        return BoundingBox(x=x, y=y, w=side, h=side)
 
     def _pad(self, b: BoundingBox) -> BoundingBox:
         cx, cy = b.x + b.w / 2.0, b.y + b.h / 2.0
@@ -413,21 +375,17 @@ class AcquireTrack(Tracker):
                                     float(box[2]), float(box[3])), sc)
         return best
 
-    def _associate(self, boxes, scores, last_bbox):
-        if last_bbox is None or len(boxes) == 0:
-            return None
-        lcx, lcy = last_bbox.x + last_bbox.w / 2.0, last_bbox.y + last_bbox.h / 2.0
-        sigma = self._reacq_assoc_sigma * max(last_bbox.w, last_bbox.h) + 1e-6
-        best, best_w = None, -1.0
+    def _best_above(self, boxes, scores):
+        """Highest-scoring detection with score ≥ lock_min_score, anywhere in the
+        full frame. Used to re-seed NanoTrack during re-acquire (no spatial gate —
+        the next confident detection wins)."""
+        best, best_score = None, -1.0
         for box, sc in zip(boxes, scores):
             sc = float(sc)
             if sc < self._lock_min_score:
                 continue
-            cx, cy = box[0] + box[2] / 2.0, box[1] + box[3] / 2.0
-            d2 = (cx - lcx) ** 2 + (cy - lcy) ** 2
-            w = sc * math.exp(-0.5 * d2 / (sigma * sigma))
-            if w > best_w:
-                best_w = w
+            if sc > best_score:
+                best_score = sc
                 best = BoundingBox(float(box[0]), float(box[1]),
                                    float(box[2]), float(box[3]))
         return best

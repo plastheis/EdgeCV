@@ -34,7 +34,6 @@ def _build(**kw):
     defaults = dict(
         acquire_crop=0.5, lock_pad=1.0, lock_min_score=0.3,
         drop_score=0.35, drop_frames=3,
-        reacq_crop_factor=3.0, reacq_crop_frames=4, reacq_assoc_sigma=0.5,
         lost_timeout_frames=6, search_timeout_frames=5,
         verify=True, verify_min_iou=0.2, verify_min_score=0.3, verify_miss_frames=3,
         max_h=48, max_w=64, max_c=3, frame_slots=4,
@@ -173,7 +172,7 @@ class TestVerification:
                 h.tick()
                 if t._state != State.LOCKED:
                     break
-            assert t._state == State.REACQ_CROP
+            assert t._state == State.REACQ
             assert t._last_bbox.x == pytest.approx(_A.x)   # anchored on A, not B
             assert t._last_bbox.y == pytest.approx(_A.y)
         finally:
@@ -192,7 +191,7 @@ class TestVerification:
                 h.tick()
                 if t._state != State.LOCKED:
                     break
-            assert t._state == State.REACQ_CROP
+            assert t._state == State.REACQ
         finally:
             t.close()
 

@@ -25,7 +25,6 @@ def _build(**kw):
     defaults = dict(
         acquire_crop=0.5, lock_pad=1.0, lock_min_score=0.3,
         drop_score=0.35, drop_frames=3,
-        reacq_crop_factor=3.0, reacq_crop_frames=4, reacq_assoc_sigma=0.5,
         lost_timeout_frames=6, search_timeout_frames=5,
         max_h=48, max_w=64, max_c=3, frame_slots=4,
     )
@@ -164,15 +163,15 @@ class TestLockAndDrop:
             for _ in range(4):
                 h.tick()
                 states.append(t._state)
-            assert State.REACQ_CROP in states
-            assert t._state == State.REACQ_CROP
+            assert State.REACQ in states
+            assert t._state == State.REACQ
         finally:
             t.close()
 
 
 class TestReacquire:
     def _locked_then_dropped(self):
-        t, State = _build(drop_frames=2, reacq_crop_frames=3,
+        t, State = _build(drop_frames=2,
                           lost_timeout_frames=5, search_timeout_frames=4)
         det = FakeYoloDetector(script=[
             (np.array([[0.5, 0.5, 0.1, 0.1]], np.float32), np.array([0.0], np.float32))])
@@ -181,12 +180,12 @@ class TestReacquire:
         h.tick(); h.tick()
         t.init(make_frame(48, 64), BoundingBox(0.5, 0.5, 0.1, 0.1))
         h.tick()
-        for _ in range(3):       # drop into REACQ_CROP
+        for _ in range(3):       # drop into REACQ
             h.tick()
-        assert t._state == State.REACQ_CROP
+        assert t._state == State.REACQ
         return t, State, det, nano, h
 
-    def test_crop_holds_last_bbox_and_coasts(self):
+    def test_reacq_holds_last_bbox_and_coasts(self):
         t, State, det, nano, h = self._locked_then_dropped()
         try:
             r = h.tick()
@@ -195,22 +194,20 @@ class TestReacquire:
         finally:
             t.close()
 
-    def test_crop_escalates_to_full(self):
+    def test_reacq_searches_full_frame(self):
         t, State, det, nano, h = self._locked_then_dropped()
         try:
-            for _ in range(5):
-                h.tick()
-                if t._state == State.REACQ_FULL:
-                    break
-            assert t._state == State.REACQ_FULL
+            # REACQ runs YOLO on the full frame immediately (no crop escalation).
             snap = t._control.read_latest()
+            assert snap.mode == Mode.YOLO
             assert snap.crop.w == pytest.approx(1.0)  # full frame
+            assert snap.crop.h == pytest.approx(1.0)
         finally:
             t.close()
 
     def test_relock_on_confident_detection(self):
-        t, State = _build(drop_frames=2, reacq_crop_frames=3)
-        # detector always finds the target near the last bbox → re-locks in re-acq
+        t, State = _build(drop_frames=2)
+        # detector always finds a confident target → re-locks during re-acq
         det = FakeYoloDetector(script=[
             (np.array([[0.5, 0.5, 0.1, 0.1]], np.float32), np.array([0.9], np.float32))])
         nano = FakeNano(scores=[0.9, 0.1, 0.1, 0.1])  # lock then drop
@@ -227,7 +224,7 @@ class TestReacquire:
                 if t._state == State.LOCKED and snap.lock_gen >= 2:
                     final_gen = snap.lock_gen
                     break
-            assert State.REACQ_CROP in seen          # passed through re-acq
+            assert State.REACQ in seen               # passed through re-acq
             assert final_gen is not None and final_gen >= 2  # re-locked
         finally:
             t.close()
@@ -262,7 +259,7 @@ class TestMutualExclusion:
             assert t._control.read_latest().mode == Mode.NANO       # LOCKED
             for _ in range(4):
                 h.tick()
-            assert t._state == State.REACQ_CROP
+            assert t._state == State.REACQ
             assert t._control.read_latest().mode == Mode.YOLO       # REACQ
         finally:
             t.close()

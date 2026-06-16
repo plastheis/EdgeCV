@@ -42,17 +42,17 @@ io:
 # outputs positionally, so the io.outputs order is the compiled-model output order.
 artifacts:
   backbone:
-    onnx: { path: nanotrack_backbone.onnx }
+    onnx: { path: nanotrackv3_backbone.onnx }
     # npu_core 2 pins NanoTrack to its own NPU core (YOLO takes core 1) for the
     # AcquireTrack two-core placement; the head shares this core (spec §11.4).
-    rknn: { path: "nanotrack_quant_{target}/nanotrack_backbone_antiuav.rknn", quant: int8, npu_core: 2 }
+    rknn: { path: "nanotrack_quant_{target}/nanotrack_backbone_yolocrop.rknn", quant: int8, npu_core: 2 }
     io:
       inputs:
         - { name: input, shape: [1, 3, 255, 255], dtype: float32 }
       outputs:
         - { name: output, shape: [1, 96, 16, 16], dtype: float32 }
   head:
-    onnx: { path: nanotrack_head.onnx }
+    onnx: { path: nanotrackv3_head.onnx }
     rknn: { path: "nanotrack_quant_{target}/nanotrack_head.rknn", quant: fp16, npu_core: 2 }
     io:
       inputs:

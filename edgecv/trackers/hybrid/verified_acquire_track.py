@@ -16,7 +16,7 @@ verified-good position, not the drifted box (re-acquiring on the drift would jus
 re-lock the clutter).
 
 Everything else — operator-gated lock, the confidence-drop path, the
-crop→full re-acquire/coast/LOST machinery — is inherited unchanged. The two loss
+full-frame re-acquire/coast/LOST machinery — is inherited unchanged. The two loss
 signals are complementary: confidence catches fast loss, verification catches
 confident drift. Set ``verify=False`` to fall back to exact AcquireTrack behaviour.
 
@@ -73,10 +73,7 @@ class VerifiedAcquireTrack(AcquireTrack):
         elif self._state == State.ACQUIRE:
             self._control.publish(mode=Mode.YOLO, crop=self._central_crop(),
                                   lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
-        elif self._state == State.REACQ_CROP:
-            self._control.publish(mode=Mode.YOLO, crop=self._reacq_crop(),
-                                  lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
-        else:  # REACQ_FULL, LOST
+        else:  # REACQ, LOST — full-frame YOLO re-acquire
             self._control.publish(mode=Mode.YOLO, crop=_FULL_CROP,
                                   lock_gen=self._lock_gen, lock_bbox=self._lock_bbox)
 
@@ -91,7 +88,7 @@ class VerifiedAcquireTrack(AcquireTrack):
         if conf < self._drop_score:
             self._miss += 1
             if self._miss >= self._drop_frames:
-                self._enter_reacq_crop()
+                self._enter_reacq()
                 self._set_out(self._last_bbox, conf, TrackStatus.COASTING,
                               sample.src_seq, sample.src_ts)
                 return
@@ -117,7 +114,7 @@ class VerifiedAcquireTrack(AcquireTrack):
                         # current box is the drift. update() republishes control.
                         anchor = self._last_good_bbox or bbox
                         self._last_bbox = anchor
-                        self._enter_reacq_crop()
+                        self._enter_reacq()
                         self._set_out(anchor, conf, TrackStatus.COASTING,
                                       sample.src_seq, sample.src_ts)
                         return
